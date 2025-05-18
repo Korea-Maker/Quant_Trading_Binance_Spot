@@ -34,7 +34,7 @@ class BinanceAPI:
         Binance API Connect Method
         """
         try:
-            self.client = Client(self.api_key, self.api_secret, {"verify": False}, testnet=True) # verify=False 의 경우 임시, testnet : 테스트 시 설정
+            self.client = Client(self.api_key, self.api_secret, testnet=True) # verify=False 의 경우 임시, testnet : 테스트 시 설정
             self.client.ping()
             self.logger.info("바이낸스 API 연결 성공")
         except BinanceAPIException as e:
