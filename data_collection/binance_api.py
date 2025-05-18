@@ -61,26 +61,54 @@ class BinanceAPI:
         """
         try:
             res = self.client.get_ticker(symbol=symbol)
-            self.logger.info(f"특정 심볼의 24시간 가격 통계 조회 성공 : {res}")
+            # self.logger.info(f"특정 심볼의 24시간 가격 통계 조회 성공 : {res}") # 테스트
             return res
         except BinanceAPIException as e:
             self.logger.error(f"특정 심볼의 24시간 가격 통계 조회 실패 : {e}")
             raise
 
-    def get_server_time(self):
+    def get_klines(self, symbol, interval, start_str, end_str=None, limit=500):
         """
-        Returns: Server Time
-        """
-        pass
-
-    def get_order_book(self, symbol):
-        """
-        오더북 조회
         Args:
             symbol: 거래 심볼
+            interval: 시간 간격 => 예시) '1m', '1h', '1d'
+            start_str: 시작 시간 => 예시) '1 day ago UTC'
+            end_str(optional): 종료 시간
+            limit(optional): 최대 데이터 수
+
+        Returns:
+            list: 캔들스틱 데이터 목록
         """
-        pass
+        try:
+            return self.client.get_historical_klines(
+                symbol=symbol,
+                interval=interval,
+                start_str=start_str,
+                end_str=end_str,
+                limit=limit
+            )
+        except BinanceAPIException as e:
+            self.logger.error(f"캔들스틱 데이터 조회 실패 : {e}")
+            raise
+
+    def get_depth(self, symbol, limit=100):
+        """
+        Args:
+            symbol: 거래 심볼
+            limit: 주문 수준 깊이
+
+        Returns:
+            dict: 오더북 데이터
+        """
+        try:
+            return self.client.get_order_book(symbol=symbol, limit=limit)
+        except BinanceAPIException as e:
+            self.logger.error(f"오더북 데이터 조회 실패 : {e}")
+            raise
 
 if __name__ == "__main__":
     api = BinanceAPI()
-    api.get_ticker('BTCUSDT')
+    print("서버 시간:", api.client.get_server_time())
+    print(f"\nBTC/USDT 티커 정보:{api.get_ticker('BTCUSDT')}")
+    print(f"\nBTC/USDT 캔들스틱 데이터:{api.get_klines('BTCUSDT', '1m', '1 day ago UTC')}")
+    print(f"\nBTC/USDT 오더북 데이터:{api.get_depth('BTCUSDT')}")
