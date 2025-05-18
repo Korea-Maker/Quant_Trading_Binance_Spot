@@ -8,6 +8,9 @@ import os
 from dotenv import load_dotenv
 from utils.logger import get_logger
 
+# import urllib3 # 인증서 에러 발생으로 인한 처리
+# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 load_dotenv()
 
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
@@ -66,20 +69,6 @@ class BinanceAPI:
         except BinanceAPIException as e:
             self.logger.error(f"특정 심볼의 24시간 가격 통계 조회 실패 : {e}")
             raise
-
-    def get_server_time(self):
-        """
-        Returns: Server Time
-        """
-        pass
-
-    def get_order_book(self, symbol):
-        """
-        오더북 조회
-        Args:
-            symbol: 거래 심볼
-        """
-        pass
 
 if __name__ == "__main__":
     api = BinanceAPI()
