@@ -43,3 +43,11 @@ data/backtest/
 
 # API Keys and Secrets
 .env
+
+# 백업 파일 무시
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+*.orig
