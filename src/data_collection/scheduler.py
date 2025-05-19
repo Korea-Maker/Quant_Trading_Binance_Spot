@@ -8,9 +8,9 @@ import os
 # 경로 추가 (직접 실행 시 필요)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from utils.logger import get_logger
-from data_collection.collectors import DataCollector
-from data_collection.storage import DataStorage
+from src.utils.logger import get_logger
+from src.data_collection.collectors import DataCollector
+from src.data_collection.storage import DataStorage
 
 
 class DataScheduler:
@@ -195,7 +195,7 @@ if __name__ == "__main__":
 
     # 테스트를 위해 수집 대상 제한
     scheduler.set_symbols(["BTCUSDT"])
-    scheduler.set_intervals(["1h", "4h"])
+    scheduler.set_intervals(["1m", "4h"])
 
 
     # Ctrl+C로 종료할 수 있도록 시그널 핸들러 설정

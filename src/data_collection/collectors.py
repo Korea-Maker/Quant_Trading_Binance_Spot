@@ -8,8 +8,8 @@ import sys
 # 경로 추가 (직접 실행 시 필요)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from utils.logger import get_logger
-from data_collection.binance_api import BinanceAPI
+from src.utils.logger import get_logger
+from src.data_collection.binance_api import BinanceAPI
 
 
 class DataCollector:

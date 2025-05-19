@@ -7,8 +7,8 @@ import sys
 # 경로 추가 (직접 실행 시 필요)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from utils.logger import get_logger
-from utils.helpers import ensure_dir_exists
+from src.utils.logger import get_logger
+from src.utils.helpers import ensure_dir_exists
 
 # 기본 데이터 경로 설정
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -213,7 +213,7 @@ class DataStorage:
 
 # 모듈 테스트를 위한 코드
 if __name__ == "__main__":
-    from data_collection.collectors import DataCollector
+    from src.data_collection.collectors import DataCollector
 
     # 데이터 수집 및 저장 테스트
     collector = DataCollector()

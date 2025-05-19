@@ -6,7 +6,7 @@ from binance.exceptions import BinanceAPIException
 import time
 import os
 from dotenv import load_dotenv
-from utils.logger import get_logger
+from src.utils.logger import get_logger
 
 load_dotenv()
 
