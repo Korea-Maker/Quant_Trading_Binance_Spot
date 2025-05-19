@@ -14,6 +14,28 @@ class TechnicalIndicators:
         """초기화"""
         self.logger = get_logger(__name__)
 
+    # 데이터프레임 유효성 검사 메서드
+    def _validate_dataframe(self, df: pd.DataFrame) -> bool:
+        """데이터프레임 유효성 검사
+
+        Args:
+            df: 검사할 데이터프레임
+
+        Returns:
+            bool: 유효성 여부
+        """
+        if df is None or df.empty:
+            self.logger.error("유효한 데이터프레임이 필요합니다.")
+            return False
+
+        required_columns = ['open', 'high', 'low', 'close', 'volume']
+        missing = [col for col in required_columns if col not in df.columns]
+        if missing:
+            self.logger.error(f"데이터프레임에 참조할 컬럼이 없습니다: {missing}")
+            return False
+
+        return True
+
     def add_moving_averages(self, df: pd.DataFrame, periods: List[int] = [5, 10, 20, 50, 100, 200]) -> pd.DataFrame:
         """이동평균선 추가
 
@@ -24,13 +46,19 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            for period in periods:
+                result[f'MA_{period}'] = talib.SMA(result['close'], timeperiod=period)
+                result[f'EMA_{period}'] = talib.EMA(result['close'], timeperiod=period)
 
-        for period in periods:
-            result[f'MA_{period}'] = talib.SMA(result['close'], timeperiod=period)
-            result[f'EMA_{period}'] = talib.EMA(result['close'], timeperiod=period)
+            self.logger.info(f"이동평균선 지표 계산 완료 (기간: {periods})")
+        except Exception as e:
+            self.logger.error(f"이동평균선 계산중 오류 발생 : {e}")
 
-        self.logger.info(f"이동평균선 지표 계산 완료 (기간: {periods})")
         return result
 
     def add_bollinger_bands(self, df: pd.DataFrame, period: int = 20, stdev_factor: float = 2.0) -> pd.DataFrame:
@@ -44,24 +72,30 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            # 볼린저 밴드 계산
+            upper, middle, lower = talib.BBANDS(
+                result['close'],
+                timeperiod=period,
+                nbdevup=stdev_factor,
+                nbdevdn=stdev_factor
+            )
 
-        # 볼린저 밴드 계산
-        upper, middle, lower = talib.BBANDS(
-            result['close'],
-            timeperiod=period,
-            nbdevup=stdev_factor,
-            nbdevdn=stdev_factor
-        )
+            result[f'BB_upper_{period}'] = upper
+            result[f'BB_middle_{period}'] = middle
+            result[f'BB_lower_{period}'] = lower
 
-        result[f'BB_upper_{period}'] = upper
-        result[f'BB_middle_{period}'] = middle
-        result[f'BB_lower_{period}'] = lower
+            # 변동성 추가 (상단-하단)/중간
+            result[f'BB_width_{period}'] = (upper - lower) / middle
 
-        # 변동성 추가 (상단-하단)/중간
-        result[f'BB_width_{period}'] = (upper - lower) / middle
+            self.logger.info(f"볼린저 밴드 지표 계산 완료 (기간: {period}, 계수: {stdev_factor})")
+        except Exception as e:
+            self.logger.error(f"볼린저 밴드 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"볼린저 밴드 지표 계산 완료 (기간: {period}, 계수: {stdev_factor})")
         return result
 
     def add_rsi(self, df: pd.DataFrame, periods: List[int] = [7, 14, 21]) -> pd.DataFrame:
@@ -74,12 +108,17 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            for period in periods:
+                result[f'RSI_{period}'] = talib.RSI(result['close'], timeperiod=period)
+            self.logger.info(f"RSI 지표 계산 완료 (기간: {periods})")
+        except Exception as e:
+            self.logger.error(f"RSI 지표 계산 중 오류 발생 : {e}")
 
-        for period in periods:
-            result[f'RSI_{period}'] = talib.RSI(result['close'], timeperiod=period)
-
-        self.logger.info(f"RSI 지표 계산 완료 (기간: {periods})")
         return result
 
     def add_macd(self, df: pd.DataFrame, fast_period: int = 12, slow_period: int = 26,
@@ -95,21 +134,27 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            # MACD, MACD Signal, MACD Histogram 계산
+            macd, signal, hist = talib.MACD(
+                result['close'],
+                fastperiod=fast_period,
+                slowperiod=slow_period,
+                signalperiod=signal_period
+            )
 
-        # MACD, MACD Signal, MACD Histogram 계산
-        macd, signal, hist = talib.MACD(
-            result['close'],
-            fastperiod=fast_period,
-            slowperiod=slow_period,
-            signalperiod=signal_period
-        )
+            result['MACD'] = macd
+            result['MACD_signal'] = signal
+            result['MACD_hist'] = hist
 
-        result['MACD'] = macd
-        result['MACD_signal'] = signal
-        result['MACD_hist'] = hist
+            self.logger.info(f"MACD 지표 계산 완료 (빠른기간: {fast_period}, 느린기간: {slow_period}, 시그널기간: {signal_period})")
+        except Exception as e:
+            self.logger.error(f"MACD 지표 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"MACD 지표 계산 완료 (빠른기간: {fast_period}, 느린기간: {slow_period}, 시그널기간: {signal_period})")
         return result
 
     def add_stochastic(self, df: pd.DataFrame, k_period: int = 14, d_period: int = 3, slowing: int = 3) -> pd.DataFrame:
@@ -124,24 +169,30 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            # 스토캐스틱 %K, %D 계산
+            k, d = talib.STOCH(
+                result['high'],
+                result['low'],
+                result['close'],
+                fastk_period=k_period,
+                slowk_period=slowing,
+                slowk_matype=0,
+                slowd_period=d_period,
+                slowd_matype=0
+            )
 
-        # 스토캐스틱 %K, %D 계산
-        k, d = talib.STOCH(
-            result['high'],
-            result['low'],
-            result['close'],
-            fastk_period=k_period,
-            slowk_period=slowing,
-            slowk_matype=0,
-            slowd_period=d_period,
-            slowd_matype=0
-        )
+            result['STOCH_K'] = k
+            result['STOCH_D'] = d
 
-        result['STOCH_K'] = k
-        result['STOCH_D'] = d
+            self.logger.info(f"스토캐스틱 지표 계산 완료 (K기간: {k_period}, D기간: {d_period}, 슬로잉: {slowing})")
+        except Exception as e:
+            self.logger.error(f"스토캐스틱 지표 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"스토캐스틱 지표 계산 완료 (K기간: {k_period}, D기간: {d_period}, 슬로잉: {slowing})")
         return result
 
     def add_atr(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
@@ -154,19 +205,25 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            result[f'ATR_{period}'] = talib.ATR(
+                result['high'],
+                result['low'],
+                result['close'],
+                timeperiod=period
+            )
 
-        result[f'ATR_{period}'] = talib.ATR(
-            result['high'],
-            result['low'],
-            result['close'],
-            timeperiod=period
-        )
+            # ATR 퍼센트 추가 (ATR/종가)
+            result[f'ATR_percent_{period}'] = result[f'ATR_{period}'] / result['close'] * 100
 
-        # ATR 퍼센트 추가 (ATR/종가)
-        result[f'ATR_percent_{period}'] = result[f'ATR_{period}'] / result['close'] * 100
+            self.logger.info(f"ATR 지표 계산 완료 (기간: {period})")
+        except Exception as e:
+            self.logger.error(f"ATR 지표 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"ATR 지표 계산 완료 (기간: {period})")
         return result
 
     def add_adx(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
@@ -179,31 +236,37 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            result[f'ADX_{period}'] = talib.ADX(
+                result['high'],
+                result['low'],
+                result['close'],
+                timeperiod=period
+            )
 
-        result[f'ADX_{period}'] = talib.ADX(
-            result['high'],
-            result['low'],
-            result['close'],
-            timeperiod=period
-        )
+            # 방향성 지표 추가 (DMI)
+            result[f'PLUS_DI_{period}'] = talib.PLUS_DI(
+                result['high'],
+                result['low'],
+                result['close'],
+                timeperiod=period
+            )
 
-        # 방향성 지표 추가 (DMI)
-        result[f'PLUS_DI_{period}'] = talib.PLUS_DI(
-            result['high'],
-            result['low'],
-            result['close'],
-            timeperiod=period
-        )
+            result[f'MINUS_DI_{period}'] = talib.MINUS_DI(
+                result['high'],
+                result['low'],
+                result['close'],
+                timeperiod=period
+            )
 
-        result[f'MINUS_DI_{period}'] = talib.MINUS_DI(
-            result['high'],
-            result['low'],
-            result['close'],
-            timeperiod=period
-        )
+            self.logger.info(f"ADX 지표 계산 완료 (기간: {period})")
+        except Exception as e:
+            self.logger.error(f"ADX 지표 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"ADX 지표 계산 완료 (기간: {period})")
         return result
 
     def add_ichimoku(self, df: pd.DataFrame,
@@ -221,30 +284,36 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            # 전환선 (Conversion Line)
+            tenkan_high = result['high'].rolling(window=tenkan_period).max()
+            tenkan_low = result['low'].rolling(window=tenkan_period).min()
+            result['ichimoku_tenkan'] = (tenkan_high + tenkan_low) / 2
 
-        # 전환선 (Conversion Line)
-        tenkan_high = result['high'].rolling(window=tenkan_period).max()
-        tenkan_low = result['low'].rolling(window=tenkan_period).min()
-        result['ichimoku_tenkan'] = (tenkan_high + tenkan_low) / 2
+            # 기준선 (Base Line)
+            kijun_high = result['high'].rolling(window=kijun_period).max()
+            kijun_low = result['low'].rolling(window=kijun_period).min()
+            result['ichimoku_kijun'] = (kijun_high + kijun_low) / 2
 
-        # 기준선 (Base Line)
-        kijun_high = result['high'].rolling(window=kijun_period).max()
-        kijun_low = result['low'].rolling(window=kijun_period).min()
-        result['ichimoku_kijun'] = (kijun_high + kijun_low) / 2
+            # 선행스팬 A (Leading Span A)
+            result['ichimoku_senkou_a'] = ((result['ichimoku_tenkan'] + result['ichimoku_kijun']) / 2).shift(kijun_period)
 
-        # 선행스팬 A (Leading Span A)
-        result['ichimoku_senkou_a'] = ((result['ichimoku_tenkan'] + result['ichimoku_kijun']) / 2).shift(kijun_period)
+            # 선행스팬 B (Leading Span B)
+            senkou_b_high = result['high'].rolling(window=senkou_b_period).max()
+            senkou_b_low = result['low'].rolling(window=senkou_b_period).min()
+            result['ichimoku_senkou_b'] = ((senkou_b_high + senkou_b_low) / 2).shift(kijun_period)
 
-        # 선행스팬 B (Leading Span B)
-        senkou_b_high = result['high'].rolling(window=senkou_b_period).max()
-        senkou_b_low = result['low'].rolling(window=senkou_b_period).min()
-        result['ichimoku_senkou_b'] = ((senkou_b_high + senkou_b_low) / 2).shift(kijun_period)
+            # 후행스팬 (Lagging Span)
+            result['ichimoku_chikou'] = result['close'].shift(-kijun_period)
 
-        # 후행스팬 (Lagging Span)
-        result['ichimoku_chikou'] = result['close'].shift(-kijun_period)
+            self.logger.info(f"일목균형표 지표 계산 완료")
+        except Exception as e:
+            self.logger.error(f"일목균형표 지표 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"일목균형표 지표 계산 완료")
         return result
 
     def add_volume_indicators(self, df: pd.DataFrame, periods: List[int] = [20]) -> pd.DataFrame:
@@ -257,22 +326,28 @@ class TechnicalIndicators:
         Returns:
             지표가 추가된 데이터프레임
         """
+        if not self._validate_dataframe(df):
+            return df
+
         result = df.copy()
+        try:
+            for period in periods:
+                # 거래량 이동평균
+                result[f'volume_MA_{period}'] = talib.SMA(result['volume'], timeperiod=period)
 
-        for period in periods:
-            # 거래량 이동평균
-            result[f'volume_MA_{period}'] = talib.SMA(result['volume'], timeperiod=period)
+                # OBV (On-Balance Volume)
+                result['OBV'] = talib.OBV(result['close'], result['volume'])
 
-            # OBV (On-Balance Volume)
-            result['OBV'] = talib.OBV(result['close'], result['volume'])
+                # 거래량 변화율
+                result['volume_change'] = result['volume'].pct_change() * 100
 
-            # 거래량 변화율
-            result['volume_change'] = result['volume'].pct_change() * 100
+                # 상대적 거래량 (현재거래량/평균거래량)
+                result[f'rel_volume_{period}'] = result['volume'] / result[f'volume_MA_{period}']
 
-            # 상대적 거래량 (현재거래량/평균거래량)
-            result[f'rel_volume_{period}'] = result['volume'] / result[f'volume_MA_{period}']
+            self.logger.info(f"거래량 지표 계산 완료 (기간: {periods})")
+        except Exception as e:
+            self.logger.error(f"거래량 지표 계산 중 오류 발생 : {e}")
 
-        self.logger.info(f"거래량 지표 계산 완료 (기간: {periods})")
         return result
 
     def add_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
