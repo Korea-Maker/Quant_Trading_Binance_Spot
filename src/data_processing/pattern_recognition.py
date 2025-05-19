@@ -7,6 +7,14 @@ from typing import List, Dict, Optional, Union, Tuple
 from src.utils.logger import get_logger
 
 
+def _to_days(diff):
+    if isinstance(diff, pd.Timedelta):
+        return diff.days
+    elif hasattr(diff, "astype") and "timedelta64" in str(type(diff)):
+        return int(diff.astype('timedelta64[D]') / np.timedelta64(1, 'D'))
+    else:
+        return int(diff)
+
 class PatternRecognition:
     """캔들스틱 및 차트 패턴 인식 클래스"""
 
@@ -419,7 +427,7 @@ class PatternRecognition:
                 price_diff_pct = abs(two_lowest.iloc[0] - two_lowest.iloc[1]) / two_lowest.iloc[0]
 
                 # 두 최저점 사이 거리 계산 (최소 5봉 간격)
-                idx_diff = abs(two_lowest.index[0] - two_lowest.index[1])
+                idx_diff = _to_days(two_lowest.index[0] - two_lowest.index[1])
 
                 # 이중 바닥 조건: 두 최저점의 가격이 유사하고, 일정 거리 이상 떨어져 있음
                 if price_diff_pct <= threshold_pct and idx_diff >= 5:
@@ -461,7 +469,7 @@ class PatternRecognition:
                 price_diff_pct = abs(two_highest.iloc[0] - two_highest.iloc[1]) / two_highest.iloc[0]
 
                 # 두 최고점 사이 거리 계산 (최소 5봉 간격)
-                idx_diff = abs(two_highest.index[0] - two_highest.index[1])
+                idx_diff = _to_days(two_highest.index[0] - two_highest.index[1])
 
                 # 이중 정점 조건: 두 최고점의 가격이 유사하고, 일정 거리 이상 떨어져 있음
                 if price_diff_pct <= threshold_pct and idx_diff >= 5:
@@ -699,10 +707,10 @@ class PatternRecognition:
                                         # datetime 인덱스인 경우
                                         if pd.api.types.is_datetime64_any_dtype([left_trough_idx, right_trough_idx]):
                                             delta = right_trough_idx - left_trough_idx
-                                            days_diff = delta.total_seconds() / (24 * 3600)  # 초를 일로 변환
+                                            days_diff = _to_days(delta.total_seconds() / (24 * 3600))  # 초를 일로 변환
                                         else:
                                             # 정수 인덱스인 경우
-                                            days_diff = right_trough_idx - left_trough_idx
+                                            days_diff = _to_days(right_trough_idx - left_trough_idx)
 
                                         if days_diff > 0:
                                             slope = (right_trough - left_trough) / days_diff
@@ -713,10 +721,10 @@ class PatternRecognition:
                                                 if pd.api.types.is_datetime64_any_dtype(
                                                         [df.index[i], right_trough_idx]):
                                                     delta = df.index[i] - right_trough_idx
-                                                    days_since_right = delta.total_seconds() / (24 * 3600)
+                                                    days_since_right = _to_days(delta.total_seconds() / (24 * 3600))
                                                 else:
                                                     # 정수 인덱스인 경우
-                                                    days_since_right = df.index[i] - right_trough_idx
+                                                    days_since_right = _to_days(df.index[i] - right_trough_idx)
 
                                                 neckline = right_trough + slope * days_since_right
 
@@ -778,10 +786,10 @@ class PatternRecognition:
                                         # datetime 인덱스인 경우
                                         if pd.api.types.is_datetime64_any_dtype([left_peak_idx, right_peak_idx]):
                                             delta = right_peak_idx - left_peak_idx
-                                            days_diff = delta.total_seconds() / (24 * 3600)  # 초를 일로 변환
+                                            days_diff = _to_days(delta.total_seconds() / (24 * 3600))  # 초를 일로 변환
                                         else:
                                             # 정수 인덱스인 경우
-                                            days_diff = right_peak_idx - left_peak_idx
+                                            days_diff = _to_days(right_peak_idx - left_peak_idx)
 
                                         if days_diff > 0:
                                             slope = (right_peak - left_peak) / days_diff
@@ -791,10 +799,10 @@ class PatternRecognition:
                                                 # datetime 인덱스인 경우
                                                 if pd.api.types.is_datetime64_any_dtype([df.index[i], right_peak_idx]):
                                                     delta = df.index[i] - right_peak_idx
-                                                    days_since_right = delta.total_seconds() / (24 * 3600)
+                                                    days_since_right = _to_days(delta.total_seconds() / (24 * 3600))
                                                 else:
                                                     # 정수 인덱스인 경우
-                                                    days_since_right = df.index[i] - right_peak_idx
+                                                    days_since_right = _to_days(df.index[i] - right_peak_idx)
 
                                                 neckline = right_peak + slope * days_since_right
 
