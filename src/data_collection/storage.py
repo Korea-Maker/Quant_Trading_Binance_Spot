@@ -1,3 +1,5 @@
+# storage.py
+
 import os
 import pandas as pd
 import json
@@ -9,9 +11,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from src.utils.logger import get_logger
 from src.utils.helpers import ensure_dir_exists
+from src.data_collection.collectors import DataCollector
 
 # 기본 데이터 경로 설정
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.path.join(ROOT_DIR, 'data')
 RAW_DATA_DIR = os.path.join(DATA_DIR, 'raw')
 PROCESSED_DATA_DIR = os.path.join(DATA_DIR, 'processed')
@@ -213,8 +216,6 @@ class DataStorage:
 
 # 모듈 테스트를 위한 코드
 if __name__ == "__main__":
-    from src.data_collection.collectors import DataCollector
-
     # 데이터 수집 및 저장 테스트
     collector = DataCollector()
     storage = DataStorage()

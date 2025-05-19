@@ -51,3 +51,4 @@ data/backtest/
 *.bak
 *.tmp
 *.orig
+*.whl

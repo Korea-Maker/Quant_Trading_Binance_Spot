@@ -1,17 +1,12 @@
-# 바이낸스 API 연결 모듈
+# binance_api.py
 
 from binance.client import Client
-from binance import AsyncClient
 from binance.exceptions import BinanceAPIException
 import time
 import os
 from dotenv import load_dotenv
 from src.utils.logger import get_logger
-
-load_dotenv()
-
-BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
-BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
+from src.config.settings import BINANCE_API_KEY, BINANCE_API_SECRET, TEST_MODE
 
 class BinanceAPI:
     """
@@ -34,7 +29,7 @@ class BinanceAPI:
         Binance API Connect Method
         """
         try:
-            self.client = Client(self.api_key, self.api_secret, testnet=True) # verify=False 의 경우 임시, testnet : 테스트 시 설정
+            self.client = Client(self.api_key, self.api_secret, testnet=TEST_MODE)
             self.client.ping()
             self.logger.info("바이낸스 API 연결 성공")
         except BinanceAPIException as e:
