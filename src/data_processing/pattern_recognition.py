@@ -704,36 +704,19 @@ class PatternRecognition:
 
                                     # 목선 기울기 - Timedelta를 일수로 변환
                                     try:
-                                        # datetime 인덱스인 경우
-                                        if pd.api.types.is_datetime64_any_dtype([left_trough_idx, right_trough_idx]):
-                                            delta = right_trough_idx - left_trough_idx
-                                            days_diff = _to_days(delta.total_seconds() / (24 * 3600))  # 초를 일로 변환
-                                        else:
-                                            # 정수 인덱스인 경우
-                                            days_diff = _to_days(right_trough_idx - left_trough_idx)
+                                        days_diff = self._to_days(right_trough_idx - left_trough_idx)
 
                                         if days_diff > 0:
                                             slope = (right_trough - left_trough) / days_diff
 
-                                            # 현재 가격이 목선 아래로 떨어졌는지 확인 (패턴 완성)
-                                            try:
-                                                # datetime 인덱스인 경우
-                                                if pd.api.types.is_datetime64_any_dtype(
-                                                        [df.index[i], right_trough_idx]):
-                                                    delta = df.index[i] - right_trough_idx
-                                                    days_since_right = _to_days(delta.total_seconds() / (24 * 3600))
-                                                else:
-                                                    # 정수 인덱스인 경우
-                                                    days_since_right = _to_days(df.index[i] - right_trough_idx)
+                                            # 현재 가격이 목선 아래로 떨어졌는지 확인
+                                            days_since_right = self._to_days(df.index[i] - right_trough_idx)
+                                            neckline = right_trough + slope * days_since_right
 
-                                                neckline = right_trough + slope * days_since_right
-
-                                                if df.iloc[i]['close'] < neckline:
-                                                    result.iloc[i] = 1
-                                            except Exception as e:
-                                                self.logger.debug(f"날짜 차이 계산 오류: {e}")
+                                            if df.iloc[i]['close'] < neckline:
+                                                result.iloc[i] = 1
                                     except Exception as e:
-                                        self.logger.debug(f"목선 기울기 계산 오류: {e}")
+                                        self.logger.debug(f"목선 계산 오류: {e}")
 
         return result
 
