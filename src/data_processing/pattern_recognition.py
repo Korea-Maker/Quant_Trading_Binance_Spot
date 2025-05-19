@@ -651,15 +651,7 @@ class PatternRecognition:
         return result
 
     def _detect_head_and_shoulders(self, df: pd.DataFrame, window: int = 40) -> pd.Series:
-        """헤드앤숄더 패턴 감지 (상승추세 후 반전 신호)
-
-        Args:
-            df: OHLCV 데이터프레임
-            window: 분석 기간
-
-        Returns:
-            헤드앤숄더 패턴 감지 시리즈 (감지: 1, 미감지: 0)
-        """
+        """헤드앤숄더 패턴 감지 (상승추세 후 반전 신호)"""
         result = pd.Series(0, index=df.index)
 
         # 최소한 window 크기 이상의 데이터가 필요
@@ -702,30 +694,43 @@ class PatternRecognition:
                                     left_trough = window_data.loc[left_trough_idx]['low']
                                     right_trough = window_data.loc[right_trough_idx]['low']
 
-                                    # 목선 기울기
-                                    days_diff = (right_trough_idx - left_trough_idx).days
-                                    if days_diff > 0:
-                                        slope = (right_trough - left_trough) / days_diff
+                                    # 목선 기울기 - Timedelta를 일수로 변환
+                                    try:
+                                        # datetime 인덱스인 경우
+                                        if pd.api.types.is_datetime64_any_dtype([left_trough_idx, right_trough_idx]):
+                                            delta = right_trough_idx - left_trough_idx
+                                            days_diff = delta.total_seconds() / (24 * 3600)  # 초를 일로 변환
+                                        else:
+                                            # 정수 인덱스인 경우
+                                            days_diff = right_trough_idx - left_trough_idx
 
-                                        # 현재 가격이 목선 아래로 떨어졌는지 확인 (패턴 완성)
-                                        days_since_right = (df.index[i] - right_trough_idx).days
-                                        neckline = right_trough + slope * days_since_right
+                                        if days_diff > 0:
+                                            slope = (right_trough - left_trough) / days_diff
 
-                                        if df.iloc[i]['close'] < neckline:
-                                            result.iloc[i] = 1
+                                            # 현재 가격이 목선 아래로 떨어졌는지 확인 (패턴 완성)
+                                            try:
+                                                # datetime 인덱스인 경우
+                                                if pd.api.types.is_datetime64_any_dtype(
+                                                        [df.index[i], right_trough_idx]):
+                                                    delta = df.index[i] - right_trough_idx
+                                                    days_since_right = delta.total_seconds() / (24 * 3600)
+                                                else:
+                                                    # 정수 인덱스인 경우
+                                                    days_since_right = df.index[i] - right_trough_idx
+
+                                                neckline = right_trough + slope * days_since_right
+
+                                                if df.iloc[i]['close'] < neckline:
+                                                    result.iloc[i] = 1
+                                            except Exception as e:
+                                                self.logger.debug(f"날짜 차이 계산 오류: {e}")
+                                    except Exception as e:
+                                        self.logger.debug(f"목선 기울기 계산 오류: {e}")
 
         return result
 
     def _detect_inverse_head_and_shoulders(self, df: pd.DataFrame, window: int = 40) -> pd.Series:
-        """역헤드앤숄더 패턴 감지 (하락추세 후 반전 신호)
-
-        Args:
-            df: OHLCV 데이터프레임
-            window: 분석 기간
-
-        Returns:
-            역헤드앤숄더 패턴 감지 시리즈 (감지: 1, 미감지: 0)
-        """
+        """역헤드앤숄더 패턴 감지 (하락추세 후 반전 신호)"""
         result = pd.Series(0, index=df.index)
 
         # 최소한 window 크기 이상의 데이터가 필요
@@ -768,17 +773,37 @@ class PatternRecognition:
                                     left_peak = window_data.loc[left_peak_idx]['high']
                                     right_peak = window_data.loc[right_peak_idx]['high']
 
-                                    # 목선 기울기
-                                    days_diff = (right_peak_idx - left_peak_idx).days
-                                    if days_diff > 0:
-                                        slope = (right_peak - left_peak) / days_diff
+                                    # 목선 기울기 - Timedelta를 일수로 변환
+                                    try:
+                                        # datetime 인덱스인 경우
+                                        if pd.api.types.is_datetime64_any_dtype([left_peak_idx, right_peak_idx]):
+                                            delta = right_peak_idx - left_peak_idx
+                                            days_diff = delta.total_seconds() / (24 * 3600)  # 초를 일로 변환
+                                        else:
+                                            # 정수 인덱스인 경우
+                                            days_diff = right_peak_idx - left_peak_idx
 
-                                        # 현재 가격이 목선 위로 올라갔는지 확인 (패턴 완성)
-                                        days_since_right = (df.index[i] - right_peak_idx).days
-                                        neckline = right_peak + slope * days_since_right
+                                        if days_diff > 0:
+                                            slope = (right_peak - left_peak) / days_diff
 
-                                        if df.iloc[i]['close'] > neckline:
-                                            result.iloc[i] = 1
+                                            # 현재 가격이 목선 위로 올라갔는지 확인 (패턴 완성)
+                                            try:
+                                                # datetime 인덱스인 경우
+                                                if pd.api.types.is_datetime64_any_dtype([df.index[i], right_peak_idx]):
+                                                    delta = df.index[i] - right_peak_idx
+                                                    days_since_right = delta.total_seconds() / (24 * 3600)
+                                                else:
+                                                    # 정수 인덱스인 경우
+                                                    days_since_right = df.index[i] - right_peak_idx
+
+                                                neckline = right_peak + slope * days_since_right
+
+                                                if df.iloc[i]['close'] > neckline:
+                                                    result.iloc[i] = 1
+                                            except Exception as e:
+                                                self.logger.debug(f"날짜 차이 계산 오류: {e}")
+                                    except Exception as e:
+                                        self.logger.debug(f"목선 기울기 계산 오류: {e}")
 
         return result
 
@@ -984,7 +1009,7 @@ if __name__ == "__main__":
 
     # 데이터 수집
     collector = DataCollector()
-    df = collector.get_historical_data("BTCUSDT", "1d", "3 months ago UTC")
+    df = collector.get_historical_data("BTCUSDT", "4h", "3 months ago UTC")
 
     # 기술적 지표 계산
     indicators = TechnicalIndicators()
@@ -1048,7 +1073,6 @@ if __name__ == "__main__":
 
         # 캔들스틱 그리기
         for i in range(len(plot_df)):
-            date = plot_df.index[i]
             open_price = plot_df['open'].iloc[i]
             close = plot_df['close'].iloc[i]
             high = plot_df['high'].iloc[i]
@@ -1131,22 +1155,17 @@ if __name__ == "__main__":
         ax3.set_ylim(-5, 5)
         ax3.grid(True)
 
-        # x축 날짜 설정 - 인덱스가 datetime 타입인지 확인
+        # x축 날짜 설정 - 인덱스 타입에 따라 다르게 처리
         tick_positions = range(0, len(plot_df), max(1, len(plot_df) // 10))
         ax3.set_xticks(tick_positions)
 
-        # 인덱스가 datetime 타입인지 확인하고 적절한 형식으로 레이블 설정
+        # 인덱스 타입에 따라 레이블 생성
         if pd.api.types.is_datetime64_any_dtype(plot_df.index):
             # datetime 인덱스인 경우 strftime 사용
             date_labels = [plot_df.index[i].strftime('%m-%d') for i in tick_positions]
         else:
-            # 인덱스가 정수인 경우 (또는 다른 타입)
-            if isinstance(plot_df.index[0], int):
-                # 인덱스 값 자체를 사용
-                date_labels = [str(i) for i in tick_positions]
-            else:
-                # 기타 형식의 경우 문자열로 변환
-                date_labels = [str(plot_df.index[i]) for i in tick_positions]
+            # 인덱스가 datetime이 아닌 경우(정수 등) 문자열로 변환
+            date_labels = [str(plot_df.index[i]) for i in tick_positions if i < len(plot_df.index)]
 
         ax3.set_xticklabels(date_labels, rotation=45)
 

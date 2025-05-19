@@ -94,6 +94,12 @@ class DataCollector:
             df = df.drop(['ignored'], axis=1)
 
             self.logger.info(f"{symbol} {interval} 과거 데이터 {len(df)}개 수집 완료")
+
+            if not pd.api.types.is_datetime64_any_dtype(df.index):
+                # 인덱스가 정수/타임스탬프인 경우 변환
+                if pd.api.types.is_integer_dtype(df.index):
+                    df.index = pd.to_datetime(df.index, unit='ms')
+
             return df
 
         except Exception as e:
