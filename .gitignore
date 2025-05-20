@@ -18,6 +18,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+data_processing/output/
 
 # Virtual Environment
 venv/

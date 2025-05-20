@@ -1000,7 +1000,7 @@ if __name__ == "__main__":
 
     # 데이터 수집
     collector = DataCollector()
-    df = collector.get_historical_data("BTCUSDT", "4h", "3 months ago UTC")
+    df = collector.get_historical_data("BTCUSDT", "1h", "3 months ago UTC")
 
     # 기술적 지표 계산
     indicators = TechnicalIndicators()
