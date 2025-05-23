@@ -30,10 +30,22 @@ class BinanceAPI:
         """
         try:
             self.client = Client(self.api_key, self.api_secret, testnet=TEST_MODE)
+
+            # 서버 시간 확인
+            server_time = self.client.get_server_time()
+            self.logger.info(f"바이낸스 서버 시간: {server_time}")
+
+            # 계정 정보 확인 (API 키 권한 확인)
+            try:
+                account_info = self.client.get_account()
+                self.logger.info("API 키 권한 확인 성공")
+            except:
+                self.logger.warning("API 키로 계정 정보 접근 불가 (퍼블릭 데이터만 사용)")
+
             self.client.ping()
             self.logger.info("바이낸스 API 연결 성공")
         except BinanceAPIException as e:
-            self.logger.error(f"바이낸스 API 연결 실패 : {e}")
+            self.logger.error(f"바이낸스 API 연결 실패: {e}")
             raise
 
     def get_exchange_info(self):
@@ -62,28 +74,39 @@ class BinanceAPI:
             self.logger.error(f"특정 심볼의 24시간 가격 통계 조회 실패 : {e}")
             raise
 
-    def get_klines(self, symbol, interval, start_str, end_str=None, limit=500):
+    def get_klines(self, symbol, interval, start_str, end_str=None, limit=1000):
         """
+        캔들스틱 데이터 조회 (개선된 버전)
+
         Args:
             symbol: 거래 심볼
-            interval: 시간 간격 => 예시) '1m', '1h', '1d'
-            start_str: 시작 시간 => 예시) '1 day ago UTC'
-            end_str(optional): 종료 시간
-            limit(optional): 최대 데이터 수
+            interval: 시간 간격
+            start_str: 시작 시간
+            end_str: 종료 시간 (optional)
+            limit: 최대 데이터 수 (기본값을 1000으로 증가)
 
         Returns:
             list: 캔들스틱 데이터 목록
         """
         try:
-            return self.client.get_historical_klines(
+            self.logger.info(f"API 요청: {symbol} {interval} {start_str} ~ {end_str} (limit: {limit})")
+
+            result = self.client.get_historical_klines(
                 symbol=symbol,
                 interval=interval,
                 start_str=start_str,
                 end_str=end_str,
                 limit=limit
             )
+
+            self.logger.info(f"API 응답: {len(result) if result else 0}개 데이터")
+
+            return result
+
         except BinanceAPIException as e:
-            self.logger.error(f"캔들스틱 데이터 조회 실패 : {e}")
+            self.logger.error(f"캔들스틱 데이터 조회 실패: {e}")
+            self.logger.error(
+                f"요청 파라미터: symbol={symbol}, interval={interval}, start_str={start_str}, end_str={end_str}, limit={limit}")
             raise
 
     def get_depth(self, symbol, limit=100):

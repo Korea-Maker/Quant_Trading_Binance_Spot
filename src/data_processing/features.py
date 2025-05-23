@@ -1,3 +1,5 @@
+# src/data_processing/features.py
+
 import pandas as pd
 import numpy as np
 from src.utils.logger import get_logger
@@ -1038,6 +1040,8 @@ def visualize_signals(df, symbol, interval):
         logger.info(f"차트를 ./output/{symbol}_{interval}_signals.png에 저장했습니다.")
     except Exception as e:
         logger.error(f"차트 시각화 중 오류 발생: {e}")
+
+
 
 
 if __name__ == "__main__":

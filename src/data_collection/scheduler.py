@@ -1,4 +1,4 @@
-# scheduler.py
+# src/data_collection/scheduler.py
 
 import schedule
 import time

@@ -1,9 +1,9 @@
-# pattern_recognition.py
+# src/data_processing/pattern_recognition.py
 
 import pandas as pd
 import numpy as np
 import talib
-from typing import List, Dict, Optional, Union, Tuple
+from typing import Dict
 from src.utils.logger import get_logger
 
 

@@ -9,7 +9,7 @@ load_dotenv()
 APP_MODE = os.getenv('APP_MODE', 'development')
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-TEST_MODE = os.getenv('TEST_MODE', 'False').lower() in ('true', '1', 'yes')
+TEST_MODE = os.getenv('TEST_MODE', 'False')
 
 # API_KEY Setting
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
