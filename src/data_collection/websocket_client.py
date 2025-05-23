@@ -1,4 +1,4 @@
-# src/data_collection/realtime_client.py
+# src/data_collection/websocket_client.py
 
 import asyncio
 import json
