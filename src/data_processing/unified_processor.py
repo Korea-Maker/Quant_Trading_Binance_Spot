@@ -688,8 +688,6 @@ class BacktestRealtimeAdapter:
                 if isinstance(trades_data, pd.DataFrame) and not trades_data.empty:
                     trades_df = trades_data
                 elif isinstance(trades_data, list) and len(trades_data) > 0:
-/* <<<<<<<<<<<<<<  ✨ Windsurf Command ⭐ >>>>>>>>>>>>>>>> */
-/* <<<<<<<<<<  6e898b31-46ec-4ed4-a478-3a4c9b23ad38  >>>>>>>>>>> */
                     # list 처리 로직
                     trades_df = pd.DataFrame(trades_data)
 

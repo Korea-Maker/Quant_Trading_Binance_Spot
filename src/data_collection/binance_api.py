@@ -1,4 +1,4 @@
-# binance_api.py
+# src/data_collection/binance_api.py
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException

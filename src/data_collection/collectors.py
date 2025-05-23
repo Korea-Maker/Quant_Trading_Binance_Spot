@@ -1,4 +1,4 @@
-# collectors.py
+# src/data_collection/collectors.py
 import pandas as pd
 import numpy as np
 import time
