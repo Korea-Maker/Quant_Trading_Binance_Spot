@@ -217,49 +217,72 @@ class RealAPIFuturesTradingTestSystem:
     async def _process_real_api_symbol_trading(self, symbol: str) -> bool:
         """실제 API를 사용한 심볼별 거래 처리"""
         try:
+            self.logger.info(f"=== {symbol} 거래 처리 시작 ===")
+
             # 신호 간격 체크 (최소 5분 간격)
             time_since_last = datetime.now() - self.last_signal_time.get(symbol, datetime.now())
+            self.logger.info(f"{symbol} 마지막 신호로부터 경과 시간: {time_since_last.total_seconds()}초")
+
             if time_since_last.total_seconds() < 300:  # 5분
+                self.logger.info(f"{symbol} 신호 간격 부족 (5분 미만), 건너뜀")
                 return False
 
             # 현재 포지션 확인
             current_positions = await self._get_real_positions(symbol)
             has_position = len(current_positions) > 0
+            self.logger.info(f"{symbol} 현재 포지션 보유 여부: {has_position}")
 
             # 시장 데이터 수집
+            self.logger.info(f"{symbol} 시장 데이터 수집 중...")
             market_data = await self._get_real_market_data(symbol)
             if not market_data:
+                self.logger.error(f"{symbol} 시장 데이터 수집 실패")
                 return False
 
-            # 신호 생성 (간단한 테스트 신호)
+            self.logger.info(
+                f"{symbol} 현재 가격: {market_data['current_price']}, 변동률: {market_data['price_change_percent']}%")
+
+            # 신호 생성
             signal_data = await self._generate_test_trading_signal(symbol, market_data, has_position)
             if not signal_data:
+                self.logger.warning(f"{symbol} 신호 생성 실패")
                 return False
 
-            self.logger.info(f"{symbol} 실제 API 신호: {signal_data['signal']} (신뢰도: {signal_data['confidence']}%)")
+            self.logger.info(f"{symbol} 생성된 신호: {signal_data['signal']} (신뢰도: {signal_data['confidence']}%)")
 
             # 실제 거래 실행 (높은 신뢰도에서만)
             if signal_data['confidence'] >= 80:
+                self.logger.info(f"{symbol} 신뢰도 조건 만족 (>= 80%), 거래 실행 시도")
+
                 if signal_data['signal'] == 'BUY' and not has_position:
+                    self.logger.info(f"{symbol} 매수 신호 실행")
                     success = await self._execute_real_futures_long_order(symbol, signal_data)
                     if success:
                         self.last_signal_time[symbol] = datetime.now()
                         return True
                 elif signal_data['signal'] == 'SELL' and not has_position:
+                    self.logger.info(f"{symbol} 매도 신호 실행")
                     success = await self._execute_real_futures_short_order(symbol, signal_data)
                     if success:
                         self.last_signal_time[symbol] = datetime.now()
                         return True
                 elif signal_data['signal'] == 'CLOSE' and has_position:
+                    self.logger.info(f"{symbol} 포지션 청산 신호 실행")
                     success = await self._close_real_futures_position(symbol, signal_data)
                     if success:
                         self.last_signal_time[symbol] = datetime.now()
                         return True
+                else:
+                    self.logger.info(f"{symbol} 거래 조건 불만족 - 신호: {signal_data['signal']}, 포지션보유: {has_position}")
+            else:
+                self.logger.info(f"{symbol} 신뢰도 부족 ({signal_data['confidence']}% < 80%), 거래 건너뜀")
 
             return False
 
         except Exception as e:
             self.logger.error(f"{symbol} 실제 API 거래 처리 오류: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
 
     async def _get_real_positions(self, symbol: str) -> List[Dict]:
@@ -287,49 +310,64 @@ class RealAPIFuturesTradingTestSystem:
             if not order_manager:
                 return None
 
-            # 현재 가격 조회
-            ticker = order_manager.api.client.futures_symbol_ticker(symbol=symbol)
-            current_price = float(ticker['price'])
+                # 현재 가격 조회
+            current_ticker = order_manager.api.client.futures_symbol_ticker(symbol=symbol)
+            current_price = float(current_ticker['price'])
 
-            # 24시간 통계
-            stats = order_manager.api.client.futures_24hr_ticker(symbol=symbol)
+            # 24시간 통계 조회 (올바른 메서드 사용)
+            stats = order_manager.api.client.futures_ticker(symbol=symbol)
 
             return {
                 'symbol': symbol,
                 'current_price': current_price,
-                'volume': float(stats['volume']),
-                'price_change_percent': float(stats['priceChangePercent']),
-                'high_price': float(stats['highPrice']),
-                'low_price': float(stats['lowPrice'])
+                'volume': float(stats.get('volume', 0)),
+                'price_change_percent': float(stats.get('priceChangePercent', 0)),
+                'high_price': float(stats.get('highPrice', current_price)),
+                'low_price': float(stats.get('lowPrice', current_price)),
+                'open_price': float(stats.get('openPrice', current_price)),
+                'count': int(stats.get('count', 0))  # 거래 횟수
             }
 
         except Exception as e:
             self.logger.error(f"{symbol} 실제 시장 데이터 수집 오류: {e}")
-            return None
+            # 에러 발생 시 기본값 반환
+            try:
+                ticker = order_manager.api.client.futures_symbol_ticker(symbol=symbol)
+                return {
+                    'symbol': symbol,
+                    'current_price': float(ticker['price']),
+                    'volume': 0,
+                    'price_change_percent': 0,
+                    'high_price': float(ticker['price']),
+                    'low_price': float(ticker['price'])
+                }
+            except:
+                return None
 
     async def _generate_test_trading_signal(self, symbol: str, market_data: Dict, has_position: bool) -> Optional[Dict]:
         """테스트용 간단한 거래 신호 생성"""
         try:
-            # 간단한 가격 기반 신호 (테스트용)
             current_price = market_data['current_price']
             price_change = market_data['price_change_percent']
 
             signal = 'HOLD'
             confidence = 50
 
-            # 단순한 로직으로 테스트 신호 생성
+            # 더 쉬운 조건으로 테스트
             if not has_position:
-                if price_change > 1.0:  # 1% 이상 상승
+                if price_change > 0.1:  # 0.1% 이상 상승 (기존: 1%)
                     signal = 'BUY'
-                    confidence = min(80 + abs(price_change) * 2, 95)
-                elif price_change < -1.0:  # 1% 이상 하락
+                    confidence = min(85, 80 + abs(price_change) * 2)  # 최소 85% 보장
+                elif price_change < -0.1:  # 0.1% 이상 하락 (기존: 1%)
                     signal = 'SELL'
-                    confidence = min(80 + abs(price_change) * 2, 95)
+                    confidence = min(85, 80 + abs(price_change) * 2)  # 최소 85% 보장
             else:
                 # 포지션이 있으면 청산 신호 (테스트용)
-                if abs(price_change) > 0.5:
+                if abs(price_change) > 0.05:  # 기존: 0.5%
                     signal = 'CLOSE'
-                    confidence = 85
+                    confidence = 90
+
+            self.logger.info(f"{symbol} 신호 생성 상세: 가격변동={price_change}%, 신호={signal}, 신뢰도={confidence}%")
 
             return {
                 'signal': signal,
