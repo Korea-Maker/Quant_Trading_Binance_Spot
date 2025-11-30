@@ -14,6 +14,12 @@ from src.data_processing.unified_processor import UnifiedDataProcessor, Backtest
 from src.data_collection.websocket_client import BinanceWebSocketClient
 from src.backtesting.backtest_engine import BacktestEngine
 from src.data_collection.collectors import DataCollector
+from src.execution.spot_order_manager import SpotOrderManager
+from src.execution.order_manager import FuturesOrderManager, OrderSide, PositionType
+from src.config.settings import TRADING_TYPE
+from src.strategy.base import BaseStrategy
+from src.monitoring.performance import PerformanceMonitor
+from src.monitoring.dashboard import TradingDashboard
 
 
 class RealtimeBacktestIntegration:
@@ -40,15 +46,18 @@ class RealtimeBacktestIntegration:
         # 컴포넌트 초기화
         self.unified_processor = UnifiedDataProcessor(
             buffer_size=1000,
-            min_data_points=200,
+            min_data_points=50,  # 200 -> 50으로 감소 (더 빠른 신호 생성)
             enable_ml_features=True
         )
 
-        # 실시간 데이터를 위한 큐
-        self.realtime_data_queue = asyncio.Queue()
+        # 실시간 데이터를 위한 큐 (최대 크기 제한으로 메모리 보호)
+        self.realtime_data_queue = asyncio.Queue(maxsize=1000)
 
         # 웹소켓 클라이언트는 콜백과 함께 초기화
         self.realtime_client = None
+        
+        # 메인 이벤트 루프 저장 (웹소켓 콜백에서 사용)
+        self.main_loop = None
 
         self.data_collector = DataCollector()
 
@@ -68,43 +77,164 @@ class RealtimeBacktestIntegration:
 
         # 웹소켓 스레드
         self.ws_thread = None
+        
+        # 주문 관리자 (스팟 거래 또는 선물 거래)
+        self.order_manager: Optional[SpotOrderManager | FuturesOrderManager] = None
+        self.strategy: Optional[BaseStrategy] = None
+        self.total_capital: float = 10000.0  # 기본 자본
+        
+        # 모니터링
+        self.performance_monitor: Optional[PerformanceMonitor] = None
+        self.dashboard: Optional[TradingDashboard] = None
+
+    async def _safe_queue_put(self, data: dict):
+        """안전하게 큐에 데이터 추가 (큐가 가득 찬 경우 처리)"""
+        try:
+            # 큐 크기 확인 (가득 찬 경우 경고)
+            try:
+                queue_size = self.realtime_data_queue.qsize()
+                if queue_size > 500:  # 큐가 절반 이상 찬 경우
+                    self.logger.warning(
+                        f"큐가 가득 차고 있습니다. 현재 크기: {queue_size}/1000. "
+                        f"데이터 처리 속도를 확인하세요."
+                    )
+            except AttributeError:
+                # qsize()가 없는 경우 (일부 Python 버전)
+                pass
+            
+            # put_nowait 시도 (논블로킹)
+            self.realtime_data_queue.put_nowait(data)
+        except asyncio.QueueFull:
+            # 큐가 가득 찬 경우, 가장 오래된 항목 제거 후 추가
+            try:
+                self.realtime_data_queue.get_nowait()  # 가장 오래된 항목 제거
+                self.realtime_data_queue.put_nowait(data)  # 새 항목 추가
+                self.logger.warning("큐가 가득 차서 가장 오래된 데이터를 제거하고 새 데이터를 추가했습니다.")
+            except asyncio.QueueEmpty:
+                # 큐가 비어있는 경우 (동시성 문제) - 일반 put 사용
+                await self.realtime_data_queue.put(data)
+        except Exception as e:
+            self.logger.error(f"큐에 데이터 추가 중 오류: {e}", exc_info=True)
+            raise
 
     def _websocket_callback(self, data: dict, stream_info: dict):
         """웹소켓 콜백 함수 - 동기 함수에서 비동기 큐로 데이터 전달"""
-        # 완성된 캔들만 처리
-        if stream_info['type'] == 'kline' and data.get('is_closed', False):
-            # asyncio 이벤트 루프가 있는지 확인
+        self.logger.info(f"웹소켓 콜백 호출됨: stream_type={stream_info.get('type', 'unknown')}")
+        
+        # kline 데이터 처리 (완성된 캔들 우선, 진행 중인 캔들도 처리)
+        if stream_info.get('type') == 'kline':
+            is_closed = data.get('is_closed', False)
+            close_price = data.get('close', 'N/A')
+            
+            self.logger.info(f"Kline 데이터 수신: is_closed={is_closed}, close={close_price}")
+            
+            # 메인 이벤트 루프 사용 (웹소켓은 별도 스레드에서 실행되므로)
+            if self.main_loop is None:
+                self.logger.error("메인 이벤트 루프가 설정되지 않았습니다. start() 메서드가 호출되었는지 확인하세요.")
+                return
+            
             try:
-                loop = asyncio.get_running_loop()
-                # 비동기 태스크로 큐에 추가
-                asyncio.run_coroutine_threadsafe(
-                    self.realtime_data_queue.put(data),
-                    loop
-                )
-            except RuntimeError:
-                # 이벤트 루프가 없는 경우 (테스트 환경 등)
-                self.logger.warning("이벤트 루프를 찾을 수 없습니다.")
+                # 이벤트 루프가 닫혔는지 확인
+                if self.main_loop.is_closed():
+                    self.logger.warning("메인 이벤트 루프가 닫혔습니다. 큐에 데이터를 추가할 수 없습니다.")
+                    return
+                
+                # 비동기 태스크로 큐에 추가 (메인 루프 사용)
+                # _safe_queue_put을 사용하여 큐가 가득 찬 경우 자동 처리
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._safe_queue_put(data),
+                        self.main_loop
+                    )
+                    # 완료 대기 (타임아웃 2초)
+                    try:
+                        future.result(timeout=2.0)
+                        if is_closed:
+                            self.logger.debug(f"[OK] 완성된 캔들 데이터 큐에 추가됨: {close_price}")
+                        else:
+                            self.logger.debug(f"[OK] 진행 중인 캔들 데이터 큐에 추가됨: {close_price}")
+                    except asyncio.TimeoutError:
+                        self.logger.warning(
+                            f"큐에 데이터 추가 타임아웃 (2초 초과). "
+                            f"큐가 가득 찼거나 처리 속도가 느립니다. "
+                            f"데이터를 건너뜁니다: {close_price}"
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f"큐에 데이터 추가 실패: {type(e).__name__}: {str(e)}",
+                            exc_info=True
+                        )
+                except RuntimeError as e:
+                    # 이벤트 루프 관련 오류
+                    if "loop is closed" in str(e) or "Event loop is closed" in str(e):
+                        self.logger.warning("이벤트 루프가 닫혔습니다. 웹소켓 콜백을 중단합니다.")
+                    else:
+                        self.logger.error(f"웹소켓 콜백 처리 중 RuntimeError: {e}", exc_info=True)
+                    
+            except RuntimeError as e:
+                # 이벤트 루프 관련 오류
+                if "loop is closed" in str(e) or "Event loop is closed" in str(e):
+                    self.logger.warning("이벤트 루프가 닫혔습니다. 웹소켓 콜백을 중단합니다.")
+                else:
+                    self.logger.error(f"웹소켓 콜백 처리 중 RuntimeError: {e}", exc_info=True)
+            except Exception as e:
+                self.logger.error(f"웹소켓 콜백 처리 중 오류: {type(e).__name__}: {str(e)}", exc_info=True)
+        else:
+            self.logger.debug(f"kline이 아닌 데이터 타입: {stream_info.get('type')}")
 
-    async def start(self, strategy_func: Callable):
+    async def start(self, strategy: BaseStrategy, total_capital: float = 10000.0):
         """통합 시스템 시작
 
         Args:
-            strategy_func: 거래 전략 함수
+            strategy: 거래 전략 객체 (BaseStrategy)
+            total_capital: 총 자본
         """
         self.is_running = True
+        self.strategy = strategy
+        self.total_capital = total_capital
+        
+        # 메인 이벤트 루프 저장 (웹소켓 콜백에서 사용)
+        self.main_loop = asyncio.get_running_loop()
+        
         self.logger.info(f"통합 시스템 시작: {self.symbol} {self.interval}")
 
         try:
-            # 초기 백테스팅 실행 및 피드백 설정
-            await self._initial_backtest_and_feedback(strategy_func)
-
-            # 웹소켓 클라이언트 생성 및 시작
+            # 주문 관리자 초기화 (거래 타입에 따라 선택)
+            if TRADING_TYPE == 'futures':
+                self.order_manager = FuturesOrderManager(
+                    symbol=self.symbol,
+                    initial_leverage=5.0,  # 기본 레버리지 (필요시 설정에서 가져올 수 있음)
+                    position_type=PositionType.ISOLATED  # 격리 마진 모드
+                )
+                self.logger.info(f"선물 거래 주문 관리자 초기화: {self.symbol}")
+            else:
+                self.order_manager = SpotOrderManager(symbol=self.symbol)
+                self.logger.info(f"스팟 거래 주문 관리자 초기화: {self.symbol}")
+            
+            # 모니터링 초기화
+            self.performance_monitor = PerformanceMonitor(initial_capital=total_capital)
+            self.dashboard = TradingDashboard(performance_monitor=self.performance_monitor)
+            self.dashboard.update_status("RUNNING")
+            
+            # 전략 활성화
+            self.strategy.is_active = True
+            
+            # 웹소켓 클라이언트 생성 및 시작 (먼저 시작하여 데이터 수집)
             self._start_websocket()
+            
+            # 초기 데이터 수집 대기 (최소 데이터 포인트 확보)
+            self.logger.info(f"초기 데이터 수집 대기 중... (최소 {self.unified_processor.min_data_points}개 필요)")
+            await asyncio.sleep(5)  # 웹소켓 연결 안정화 대기
+            
+            # 초기 백테스팅 실행 및 피드백 설정
+            await self._initial_backtest_and_feedback(self._strategy_func_wrapper)
 
             # 실시간 처리 및 주기적 백테스팅 태스크 시작
             tasks = [
-                asyncio.create_task(self._realtime_trading_loop(strategy_func)),
-                asyncio.create_task(self._periodic_backtest_loop(strategy_func))
+                asyncio.create_task(self._realtime_trading_loop(self._strategy_func_wrapper)),
+                asyncio.create_task(self._periodic_backtest_loop(self._strategy_func_wrapper)),
+                asyncio.create_task(self._risk_management_loop()),
+                asyncio.create_task(self._dashboard_update_loop())
             ]
 
             await asyncio.gather(*tasks)
@@ -140,6 +270,11 @@ class RealtimeBacktestIntegration:
         """시스템 중지"""
         self.logger.info("통합 시스템 중지 중...")
         self.is_running = False
+        
+        if self.dashboard:
+            self.dashboard.update_status("STOPPED")
+            self.dashboard.print_dashboard()
+        
         self._stop_websocket()
 
     async def _initial_backtest_and_feedback(self, strategy_func: Callable):
@@ -151,9 +286,9 @@ class RealtimeBacktestIntegration:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=self.backtest_lookback_days)
 
-            # 먼저 전략을 백테스트 엔진에 추가
+            # 먼저 전략을 백테스트 엔진에 추가 (백테스팅용 어댑터 사용)
             strategy_name = "adaptive_strategy"
-            self.backtest_engine.add_strategy(strategy_name, strategy_func)
+            self.backtest_engine.add_strategy(strategy_name, self._backtest_strategy_adapter)
 
             # 백테스팅 실행 - 올바른 시그니처 사용
             backtest_results = self.backtest_engine.run_backtest(
@@ -183,6 +318,84 @@ class RealtimeBacktestIntegration:
             import traceback
             self.logger.error(traceback.format_exc())
 
+    def _strategy_func_wrapper(self, signal: Dict) -> str:
+        """전략 함수 래퍼 (실시간 거래용)"""
+        if self.strategy:
+            return self.strategy.generate_signal(signal)
+        return 'hold'
+    
+    def _backtest_strategy_adapter(self, data: pd.DataFrame, position: float) -> int:
+        """
+        백테스팅 엔진용 전략 어댑터
+        
+        백테스팅 엔진은 (data: pd.DataFrame, position: float) -> int 시그니처를 기대하지만,
+        실제 전략은 Dict를 받으므로 어댑터가 필요합니다.
+        
+        Args:
+            data: OHLCV 데이터 DataFrame
+            position: 현재 포지션 (양수: 롱, 0: 없음)
+            
+        Returns:
+            int: 1 (매수), -1 (매도), 0 (홀드)
+        """
+        if self.strategy is None:
+            return 0
+        
+        try:
+            # DataFrame의 마지막 행을 Dict로 변환
+            if data.empty or len(data) == 0:
+                return 0
+            
+            latest = data.iloc[-1]
+            
+            # 신호 딕셔너리 생성 (UnifiedDataProcessor 형식과 유사하게)
+            signal_dict = {
+                'primary_signal': 'HOLD',
+                'signal_strength': 0.0,
+                'confidence': 50.0,
+                'indicators': {
+                    'close': float(latest.get('close', 0)),
+                    'open': float(latest.get('open', 0)),
+                    'high': float(latest.get('high', 0)),
+                    'low': float(latest.get('low', 0)),
+                    'volume': float(latest.get('volume', 0))
+                },
+                'patterns': {},
+                'timestamp': latest.get('timestamp', datetime.now()) if 'timestamp' in latest else datetime.now()
+            }
+            
+            # 간단한 이동평균 크로스오버 로직 (백테스팅용)
+            if len(data) >= 20:
+                ma_short = data['close'].rolling(5).mean().iloc[-1]
+                ma_long = data['close'].rolling(20).mean().iloc[-1]
+                
+                if not pd.isna(ma_short) and not pd.isna(ma_long):
+                    # 골든 크로스 - 매수
+                    if ma_short > ma_long and position == 0:
+                        signal_dict['primary_signal'] = 'BUY'
+                        signal_dict['signal_strength'] = 1.0
+                        signal_dict['confidence'] = 70.0
+                    # 데드 크로스 - 매도
+                    elif ma_short < ma_long and position > 0:
+                        signal_dict['primary_signal'] = 'SELL'
+                        signal_dict['signal_strength'] = -1.0
+                        signal_dict['confidence'] = 70.0
+            
+            # 전략 실행
+            action = self.strategy.generate_signal(signal_dict)
+            
+            # 문자열을 int로 변환
+            if action == 'buy':
+                return 1
+            elif action == 'sell':
+                return -1
+            else:
+                return 0
+                
+        except Exception as e:
+            self.logger.error(f"백테스팅 전략 어댑터 오류: {e}", exc_info=True)
+            return 0
+    
     async def _realtime_trading_loop(self, strategy_func: Callable):
         """실시간 거래 루프"""
         self.logger.info("실시간 거래 루프 시작")
@@ -196,30 +409,182 @@ class RealtimeBacktestIntegration:
         )
 
         # 신호 처리 루프
+        signal_count = 0
         while self.is_running:
             try:
                 # 신호 대기
                 signal = await asyncio.wait_for(signal_queue.get(), timeout=1.0)
+                signal_count += 1
+                
+                self.logger.info(f"신호 수신 (#{signal_count}): {signal.get('primary_signal', 'UNKNOWN')}")
 
                 # 전략 실행
-                action = strategy_func(signal)
+                if self.strategy:
+                    action = self.strategy.generate_signal(signal)
+                    self.logger.info(f"전략 실행 결과: {action} (신뢰도: {signal.get('confidence', 0):.1f}%)")
+                    
+                    # 신호 검증
+                    if not self.strategy.validate_signal(action, signal):
+                        self.logger.warning(f"신호 검증 실패: {action} -> hold로 변경")
+                        action = 'hold'
+                else:
+                    action = strategy_func(signal)
+                    self.logger.info(f"전략 함수 실행 결과: {action}")
 
                 # 거래 실행
                 if action != 'hold':
+                    self.logger.info(f"거래 실행 시작: {action}")
                     await self._execute_trade(action, signal)
+                    # 전략에 거래 로깅
+                    if self.strategy:
+                        self.strategy.log_trade(action, signal, executed=True)
+                    self.logger.info(f"거래 실행 완료: {action}")
+                else:
+                    self.logger.debug(f"거래 실행 스킵: {action} (hold)")
 
+                # 대시보드 업데이트
+                if self.dashboard:
+                    self.dashboard.update_signal(signal)
+                    if 'indicators' in signal and 'close' in signal['indicators']:
+                        self.dashboard.update_price(signal['indicators']['close'])
+                
                 # 성능 추적
                 self._track_performance(signal)
 
             except asyncio.TimeoutError:
+                # 타임아웃은 정상 (신호 대기 중)
                 continue
             except Exception as e:
-                self.logger.error(f"실시간 처리 오류: {e}")
+                self.logger.error(f"실시간 처리 오류: {e}", exc_info=True)
 
         # 정리
         await self.realtime_data_queue.put(None)
         await process_task
 
+    async def _risk_management_loop(self):
+        """리스크 관리 루프 (손절/익절 확인)"""
+        while self.is_running:
+            try:
+                if self.order_manager:
+                    # 현재 가격으로 리스크 관리 확인
+                    if TRADING_TYPE == 'futures' and isinstance(self.order_manager, FuturesOrderManager):
+                        # 선물 거래: check_risk_management(current_price) 필요
+                        try:
+                            # 선물 거래의 경우 get_current_price 사용 (더 안전)
+                            current_price = self.order_manager.get_current_price()
+                            if current_price and current_price > 0:
+                                self.order_manager.check_risk_management(current_price)
+                            else:
+                                self.logger.warning("선물 거래 가격 조회 실패: 가격이 유효하지 않음")
+                                current_price = 0.0
+                        except Exception as e:
+                            self.logger.error(f"선물 거래 가격 조회 실패: {e}")
+                            current_price = 0.0
+                    else:
+                        # 스팟 거래: check_risk_management() 또는 check_risk_management(current_price)
+                        try:
+                            current_price = self.order_manager.get_current_price()
+                            if hasattr(self.order_manager, 'check_risk_management'):
+                                # check_risk_management가 current_price를 받는지 확인
+                                import inspect
+                                sig = inspect.signature(self.order_manager.check_risk_management)
+                                if len(sig.parameters) > 0:
+                                    self.order_manager.check_risk_management(current_price)
+                                else:
+                                    self.order_manager.check_risk_management()
+                        except Exception as e:
+                            self.logger.error(f"스팟 거래 리스크 관리 확인 실패: {e}")
+                            current_price = 0.0
+                    
+                    # 대시보드 가격 업데이트
+                    if self.dashboard and current_price > 0:
+                        self.dashboard.update_price(current_price)
+                    
+                    # 실제 계정 잔액 조회 및 성능 통계 업데이트
+                    await self._update_performance_from_account()
+                
+                # 10초마다 확인
+                await asyncio.sleep(10)
+                
+            except Exception as e:
+                self.logger.error(f"리스크 관리 루프 오류: {e}")
+                await asyncio.sleep(10)
+    
+    async def _update_performance_from_account(self):
+        """실제 계정 잔액을 조회하여 성능 통계 업데이트"""
+        try:
+            if not self.performance_monitor or not self.order_manager:
+                return
+            
+            # 거래 타입에 따라 잔액 조회
+            if TRADING_TYPE == 'futures':
+                # 선물 거래: 계정 잔액 + 미실현 손익
+                try:
+                    account_info = self.order_manager.api.client.futures_account()
+                    total_wallet_balance = float(account_info.get('totalWalletBalance', 0))
+                    available_balance = float(account_info.get('availableBalance', 0))
+                    
+                    # 현재 포지션의 미실현 손익 포함
+                    current_position = self.order_manager.get_current_position()
+                    unrealized_pnl = 0.0
+                    if current_position:
+                        unrealized_pnl = current_position.unrealized_pnl if hasattr(current_position, 'unrealized_pnl') else 0.0
+                    
+                    # 현재 자본 = 총 잔액 (미실현 손익 포함)
+                    current_capital = total_wallet_balance
+                    
+                    # 성능 모니터 업데이트
+                    self.performance_monitor.update_current_capital(current_capital)
+                    
+                    self.logger.debug(
+                        f"성능 통계 업데이트: 자본={current_capital:.2f}, "
+                        f"사용 가능={available_balance:.2f}, 미실현 손익={unrealized_pnl:.2f}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"선물 계정 잔액 조회 실패: {e}")
+            else:
+                # 스팟 거래: USDT 잔액 + 보유 자산 가치
+                try:
+                    balance = self.order_manager.get_account_balance('USDT')
+                    usdt_balance = balance.get('free', 0.0) + balance.get('locked', 0.0)
+                    
+                    # 보유 자산 가치 계산
+                    current_position = self.order_manager.get_current_position()
+                    asset_value = 0.0
+                    if current_position and current_position.quantity > 0:
+                        current_price = self.order_manager.get_current_price()
+                        asset_value = current_position.quantity * current_price
+                    
+                    # 현재 자본 = USDT 잔액 + 보유 자산 가치
+                    current_capital = usdt_balance + asset_value
+                    
+                    # 성능 모니터 업데이트
+                    self.performance_monitor.update_current_capital(current_capital)
+                    
+                    self.logger.debug(
+                        f"성능 통계 업데이트: 자본={current_capital:.2f}, "
+                        f"USDT={usdt_balance:.2f}, 자산 가치={asset_value:.2f}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"스팟 계정 잔액 조회 실패: {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"성능 통계 업데이트 중 오류: {e}")
+    
+    async def _dashboard_update_loop(self):
+        """대시보드 업데이트 루프"""
+        while self.is_running:
+            try:
+                if self.dashboard:
+                    # 주기적으로 대시보드 출력 (30초마다)
+                    self.dashboard.print_dashboard()
+                
+                await asyncio.sleep(30)
+                
+            except Exception as e:
+                self.logger.error(f"대시보드 업데이트 오류: {e}")
+                await asyncio.sleep(30)
+    
     async def _periodic_backtest_loop(self, strategy_func: Callable):
         """주기적 백테스팅 및 피드백 업데이트 루프"""
         while self.is_running:
@@ -232,8 +597,8 @@ class RealtimeBacktestIntegration:
                 if hours_since_update >= self.feedback_update_hours:
                     self.logger.info("주기적 백테스팅 실행 중...")
 
-                    # 최근 데이터로 백테스팅
-                    await self._run_incremental_backtest(strategy_func)
+                    # 최근 데이터로 백테스팅 (백테스팅용 어댑터 사용)
+                    await self._run_incremental_backtest(self._backtest_strategy_adapter)
 
                     # 피드백 업데이트
                     self.last_feedback_update = datetime.now()
@@ -270,39 +635,194 @@ class RealtimeBacktestIntegration:
         self.logger.info(f"증분 백테스팅 완료. 최근 정확도: {performance_metrics.get('overall_accuracy', 0):.2%}")
 
     async def _execute_trade(self, action: str, signal: Dict):
-        """거래 실행 (시뮬레이션)
+        """거래 실행 (실제 주문)
 
         Args:
             action: 'buy' 또는 'sell'
             signal: 거래 신호 정보
         """
-        trade_record = {
-            'timestamp': signal['timestamp'],
-            'action': action,
-            'price': signal['indicators'].get('close', 0),
-            'signal_strength': signal['signal_strength'],
-            'confidence': signal['confidence'],
-            'patterns': signal['patterns'],
-            'position_size': self._calculate_position_size(signal)
-        }
-
-        # 포지션 업데이트
-        if action == 'buy':
-            self.active_positions[signal['timestamp']] = trade_record
-        elif action == 'sell' and self.active_positions:
-            # 가장 오래된 포지션 청산
-            oldest_position = min(self.active_positions.keys())
-            entry_trade = self.active_positions.pop(oldest_position)
-
-            # 수익 계산
-            trade_record['entry_price'] = entry_trade['price']
-            trade_record['profit'] = (trade_record['price'] - entry_trade['price']) / entry_trade['price']
-            trade_record['holding_time'] = (trade_record['timestamp'] - oldest_position).total_seconds() / 3600
-
-        # 거래 기록 저장
-        self.trade_history.append(trade_record)
-
-        self.logger.info(f"거래 실행: {action} @ {trade_record['price']:.2f}")
+        if not self.order_manager:
+            self.logger.error("주문 관리자가 초기화되지 않았습니다.")
+            return
+        
+        try:
+            current_price = signal.get('indicators', {}).get('close', 0)
+            if current_price == 0:
+                current_price = self.order_manager.get_current_price()
+            
+            # 포지션 크기 계산
+            if self.strategy:
+                position_size_pct = self.strategy.calculate_position_size(
+                    action, signal, self.total_capital
+                )
+            else:
+                position_size_pct = self._calculate_position_size(signal)
+            
+            trade_record = {
+                'timestamp': signal.get('timestamp', datetime.now()),
+                'action': action,
+                'price': current_price,
+                'signal_strength': signal.get('signal_strength', 0),
+                'confidence': signal.get('confidence', 0),
+                'patterns': signal.get('patterns', {}),
+                'position_size_pct': position_size_pct
+            }
+            
+            # 실제 주문 실행 (거래 타입에 따라 분기)
+            if TRADING_TYPE == 'futures':
+                # 선물 거래
+                if isinstance(self.order_manager, FuturesOrderManager):
+                    if action == 'buy':
+                        # 현재 포지션 확인
+                        current_position = self.order_manager.get_current_position()
+                        if current_position:
+                            if current_position.side == OrderSide.LONG:
+                                self.logger.warning(
+                                    f"이미 롱 포지션이 있습니다. 중복 매수 방지: "
+                                    f"{current_position.quantity:.6f} @ {current_position.entry_price:.2f}"
+                                )
+                                trade_record['executed'] = False
+                                trade_record['reason'] = 'already_has_long_position'
+                                return
+                            elif current_position.side == OrderSide.SHORT:
+                                self.logger.warning(
+                                    f"숏 포지션이 있습니다. 롱 포지션 오픈 전에 먼저 청산하세요: "
+                                    f"{current_position.quantity:.6f} @ {current_position.entry_price:.2f}"
+                                )
+                                trade_record['executed'] = False
+                                trade_record['reason'] = 'has_opposite_position'
+                                return
+                        
+                        # 롱 포지션 오픈
+                        position = self.order_manager.open_position(
+                            side=OrderSide.LONG,
+                            total_capital=self.total_capital,
+                            risk_percentage=position_size_pct
+                        )
+                        if position:
+                            trade_record['order_id'] = f"futures_long_{position.entry_time}"
+                            trade_record['quantity'] = position.quantity
+                            trade_record['executed'] = True
+                            trade_record['entry_price'] = position.entry_price
+                            self.logger.info(
+                                f"롱 포지션 오픈: {position.quantity:.6f} @ {position.entry_price:.2f}"
+                            )
+                        else:
+                            trade_record['executed'] = False
+                            self.logger.error("롱 포지션 오픈 실패")
+                    elif action == 'sell':
+                        # 포지션 청산
+                        if self.order_manager.get_current_position():
+                            success = self.order_manager.close_position(reason="Signal Sell")
+                            if success:
+                                current_position = self.order_manager.get_current_position()
+                                if current_position:
+                                    trade_record['order_id'] = f"futures_close_{datetime.now()}"
+                                    trade_record['quantity'] = current_position.quantity
+                                    trade_record['executed'] = True
+                                    trade_record['entry_price'] = current_position.entry_price
+                                    trade_record['profit'] = current_position.realized_pnl / (current_position.entry_price * current_position.quantity) if current_position.entry_price > 0 else 0.0
+                                    trade_record['profit_amount'] = current_position.realized_pnl
+                                    self.logger.info(f"포지션 청산 완료: 실현 손익 {current_position.realized_pnl:.2f}")
+                                else:
+                                    trade_record['executed'] = True
+                                    self.logger.info("포지션 청산 완료")
+                            else:
+                                trade_record['executed'] = False
+                                self.logger.error("포지션 청산 실패")
+                        else:
+                            trade_record['executed'] = False
+                            self.logger.warning("청산할 포지션이 없습니다.")
+            else:
+                # 스팟 거래
+                if isinstance(self.order_manager, SpotOrderManager):
+                    if action == 'buy':
+                        # 현재 포지션 확인
+                        current_position = self.order_manager.get_current_position()
+                        if current_position and current_position.quantity > 0:
+                            self.logger.warning(
+                                f"이미 보유 중입니다. 중복 매수 방지: "
+                                f"{current_position.quantity:.6f} @ {current_position.avg_price:.2f}"
+                            )
+                            trade_record['executed'] = False
+                            trade_record['reason'] = 'already_has_position'
+                            return
+                        
+                        # 매수 주문
+                        quote_amount = self.total_capital * position_size_pct
+                        order = self.order_manager.place_market_buy_order(
+                            quote_amount=quote_amount,
+                            current_price=current_price
+                        )
+                        
+                        if order:
+                            trade_record['order_id'] = order.client_order_id
+                            trade_record['quantity'] = order.filled_quantity
+                            trade_record['executed'] = True
+                            self.logger.info(
+                                f"매수 주문 완료: {order.filled_quantity:.6f} @ {order.avg_price:.2f}"
+                            )
+                        else:
+                            trade_record['executed'] = False
+                            self.logger.error("매수 주문 실패")
+                    
+                    elif action == 'sell':
+                        # 매도 주문
+                        current_position = self.order_manager.get_current_position()
+                        if current_position and current_position.quantity > 0:
+                            order = self.order_manager.place_market_sell_order(
+                                quantity=current_position.quantity * position_size_pct
+                            )
+                            
+                            if order:
+                                trade_record['order_id'] = order.client_order_id
+                                trade_record['quantity'] = order.filled_quantity
+                                trade_record['executed'] = True
+                                
+                                # 수익 계산
+                                if current_position.avg_price > 0:
+                                    trade_record['entry_price'] = current_position.avg_price
+                                    trade_record['profit'] = (
+                                        (order.avg_price - current_position.avg_price) / 
+                                        current_position.avg_price
+                                    )
+                                    trade_record['profit_amount'] = (
+                                        (order.avg_price - current_position.avg_price) * 
+                                        order.filled_quantity
+                                    )
+                                else:
+                                    trade_record['entry_price'] = current_position.avg_price if current_position.avg_price > 0 else order.avg_price
+                                    trade_record['profit'] = 0.0
+                                    trade_record['profit_amount'] = 0.0
+                                
+                                self.logger.info(
+                                    f"매도 주문 완료: {order.filled_quantity:.6f} @ {order.avg_price:.2f}"
+                                )
+                            else:
+                                trade_record['executed'] = False
+                                self.logger.error("매도 주문 실패")
+                        else:
+                            trade_record['executed'] = False
+                            self.logger.warning("매도할 포지션이 없습니다.")
+            
+            # 거래 기록 저장
+            self.trade_history.append(trade_record)
+            
+            # 거래 기록에 timestamp 추가 (없는 경우)
+            if 'timestamp' not in trade_record:
+                trade_record['timestamp'] = datetime.now()
+            
+            # 대시보드 업데이트
+            if self.dashboard:
+                self.dashboard.update_trade(trade_record)
+            
+            # 성능 통계 즉시 업데이트 (거래 후)
+            if self.performance_monitor:
+                # 실제 계정 잔액으로 업데이트
+                await self._update_performance_from_account()
+            
+        except Exception as e:
+            self.logger.error(f"거래 실행 중 오류: {e}", exc_info=True)
 
     def _calculate_position_size(self, signal: Dict) -> float:
         """포지션 크기 계산
@@ -316,15 +836,16 @@ class RealtimeBacktestIntegration:
         # 신뢰도와 리스크 기반 포지션 크기 결정
         base_size = 0.1  # 기본 10%
 
-        # 신뢰도 조정
-        confidence_multiplier = signal['confidence']
+        # 신뢰도 조정 (0-100 범위를 0-1로 정규화)
+        confidence = signal.get('confidence', 50)
+        confidence_multiplier = confidence / 100.0  # 0-100 -> 0-1 범위로 변환
 
         # 리스크 조정
         risk_multiplier = {
             'LOW': 1.2,
             'MEDIUM': 1.0,
             'HIGH': 0.5
-        }.get(signal['risk_level'], 1.0)
+        }.get(signal.get('risk_level', 'MEDIUM'), 1.0)
 
         # 최종 포지션 크기
         position_size = base_size * confidence_multiplier * risk_multiplier

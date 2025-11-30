@@ -22,7 +22,9 @@ data_processing/output/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
+env/
 
 # IDE
 .idea/
@@ -41,9 +43,18 @@ data/backtest/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+notebooks/.ipynb_checkpoints/
+*.ipynb_checkpoints
 
 # API Keys and Secrets
 .env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+secrets/
+*.secret
 
 # 백업 파일 무시
 *~
@@ -53,3 +64,5 @@ data/backtest/
 *.tmp
 *.orig
 *.whl
+# Wheel files (keep example or documentation)
+!*.whl.example

@@ -2,9 +2,23 @@
 
 import pandas as pd
 import numpy as np
-import talib
 from typing import Dict
 from src.utils.logger import get_logger
+
+# TA-Lib import (안전한 처리)
+try:
+    import talib
+    TALIB_AVAILABLE = True
+except ImportError as e:
+    TALIB_AVAILABLE = False
+    import warnings
+    warnings.warn(
+        f"TA-Lib을 import할 수 없습니다: {e}\n"
+        "패턴 인식 기능이 제한됩니다.",
+        ImportWarning
+    )
+    # talib을 None으로 설정하여 나중에 체크 가능하도록
+    talib = None
 
 
 def _to_days(diff):
@@ -50,124 +64,342 @@ class PatternRecognition:
         Returns:
             Dict: 패턴 함수 딕셔너리
         """
-        return {
+        # TA-Lib이 사용 가능한지 확인
+        if not TALIB_AVAILABLE or talib is None:
+            self.logger.warning("TA-Lib이 사용 불가능합니다. 패턴 인식 기능이 제한됩니다.")
+            return {}
+        
+        # 패턴 정의 (함수명을 문자열로 저장하여 안전하게 처리)
+        pattern_definitions = {
             # 망치형(Hammer) 패턴
             'HAMMER': {
-                'func': talib.CDLHAMMER,
+                'func_name': 'CDLHAMMER',
                 'type': 'bullish',
                 'desc': '망치형 - 하락 추세에서 반전 신호'
             },
             'HANGING_MAN': {
-                'func': talib.CDLHANGINGMAN,
+                'func_name': 'CDLHANGINGMAN',
                 'type': 'bearish',
                 'desc': '교수형 - 상승 추세에서 반전 신호'
             },
             'INVERTED_HAMMER': {
-                'func': talib.CDLINVERTEDHAMMER,
+                'func_name': 'CDLINVERTEDHAMMER',
                 'type': 'bullish',
                 'desc': '역망치형 - 하락 추세에서 반전 신호'
             },
             'SHOOTING_STAR': {
-                'func': talib.CDLSHOOTINGSTAR,
+                'func_name': 'CDLSHOOTINGSTAR',
                 'type': 'bearish',
                 'desc': '유성형 - 상승 추세에서 반전 신호'
             },
 
             # 도지(Doji) 패턴
             'DOJI': {
-                'func': talib.CDLDOJI,
+                'func_name': 'CDLDOJI',
                 'type': 'neutral',
                 'desc': '도지 - 시가와 종가가 거의 같은 불확실성 패턴'
             },
             'DRAGONFLY_DOJI': {
-                'func': talib.CDLDRAGONFLYDOJI,
+                'func_name': 'CDLDRAGONFLYDOJI',
                 'type': 'bullish',
                 'desc': '잠자리형 도지 - 하락 추세에서 반전 신호'
             },
             'GRAVESTONE_DOJI': {
-                'func': talib.CDLGRAVESTONEDOJI,
+                'func_name': 'CDLGRAVESTONEDOJI',
                 'type': 'bearish',
                 'desc': '묘비형 도지 - 상승 추세에서 반전 신호'
             },
 
             # 스타(Star) 패턴
             'MORNING_STAR': {
-                'func': talib.CDLMORNINGSTAR,
+                'func_name': 'CDLMORNINGSTAR',
                 'type': 'bullish',
                 'desc': '샛별형 - 하락 추세에서 강한 반전 신호'
             },
             'EVENING_STAR': {
-                'func': talib.CDLEVENINGSTAR,
+                'func_name': 'CDLEVENINGSTAR',
                 'type': 'bearish',
                 'desc': '저녁별형 - 상승 추세에서 강한 반전 신호'
             },
             'MORNING_DOJI_STAR': {
-                'func': talib.CDLMORNINGDOJISTAR,
+                'func_name': 'CDLMORNINGDOJISTAR',
                 'type': 'bullish',
                 'desc': '도지 샛별형 - 하락 추세에서 매우 강한 반전 신호'
             },
             'EVENING_DOJI_STAR': {
-                'func': talib.CDLEVENINGDOJISTAR,
+                'func_name': 'CDLEVENINGDOJISTAR',
                 'type': 'bearish',
                 'desc': '도지 저녁별형 - 상승 추세에서 매우 강한 반전 신호'
             },
 
             # 주목할만한 패턴
             'ENGULFING': {
-                'func': talib.CDLENGULFING,
+                'func_name': 'CDLENGULFING',
                 'type': 'dynamic',  # 상승 또는 하락 추세에 따라 다름
                 'desc': '감싸는 형태 - 이전 캔들을 완전히 감싸는 강한 반전 신호'
             },
             'HARAMI': {
-                'func': talib.CDLHARAMI,
+                'func_name': 'CDLHARAMI',
                 'type': 'dynamic',
                 'desc': '하라미 - 이전 캔들 안에 형성되는 약한 반전 신호'
             },
             'PIERCING': {
-                'func': talib.CDLPIERCING,
+                'func_name': 'CDLPIERCING',
                 'type': 'bullish',
                 'desc': '관통형 - 하락 추세에서 반전 신호'
             },
             'DARK_CLOUD_COVER': {
-                'func': talib.CDLDARKCLOUDCOVER,
+                'func_name': 'CDLDARKCLOUDCOVER',
                 'type': 'bearish',
                 'desc': '먹구름 - 상승 추세에서 반전 신호'
             },
 
             # 3개 캔들 패턴
             'THREE_WHITE_SOLDIERS': {
-                'func': talib.CDL3WHITESOLDIERS,
+                'func_name': 'CDL3WHITESOLDIERS',
                 'type': 'bullish',
                 'desc': '세 개의 백색 병사 - 강한 상승 신호'
             },
             'THREE_BLACK_CROWS': {
-                'func': talib.CDL3BLACKCROWS,
+                'func_name': 'CDL3BLACKCROWS',
                 'type': 'bearish',
                 'desc': '세 개의 까마귀 - 강한 하락 신호'
             },
             'THREE_INSIDE_UP': {
-                'func': talib.CDL3INSIDE,
+                'func_name': 'CDL3INSIDE',
                 'type': 'bullish',
                 'desc': '상승 내부 패턴 - 하락 추세에서 반전 신호'
             },
             'THREE_OUTSIDE_UP': {
-                'func': talib.CDL3OUTSIDE,
+                'func_name': 'CDL3OUTSIDE',
                 'type': 'bullish',
                 'desc': '상승 외부 패턴 - 하락 추세에서 강한 반전 신호'
             },
 
             # 갭 패턴
             'BREAKAWAY': {
-                'func': talib.CDLBREAKAWAY,
+                'func_name': 'CDLBREAKAWAY',
                 'type': 'dynamic',
                 'desc': '탈출 갭 - 강한 추세 전환 신호'
             },
             'KICKING': {
-                'func': talib.CDLKICKING,
+                'func_name': 'CDLKICKING',
                 'type': 'dynamic',
                 'desc': '발차기 - 매우 강한 반전 신호'
+            },
+            
+            # 추가 캔들스틱 패턴
+            'MARUBOZU': {
+                'func_name': 'CDLMARUBOZU',
+                'type': 'dynamic',
+                'desc': '장대양봉/음봉 - 강한 추세 지속 신호'
+            },
+            'SPINNING_TOP': {
+                'func_name': 'CDLSPINNINGTOP',
+                'type': 'neutral',
+                'desc': '도깨비불 - 불확실성, 추세 약화 신호'
+            },
+            # TWEezER 패턴은 TA-Lib에 없으므로 제거 (직접 구현 가능하지만 일단 제외)
+            'THREE_LINE_STRIKE': {
+                'func_name': 'CDL3LINESTRIKE',
+                'type': 'dynamic',
+                'desc': '삼선 돌파 - 강한 추세 전환 신호'
+            },
+            # UPSIDE_GAP_THREE_METHODS는 TA-Lib에 없으므로 제거 (CDLXSIDEGAP3METHODS가 올바른 이름일 수 있음)
+            # 'UPSIDE_GAP_THREE_METHODS': {
+            #     'func_name': 'CDLUPSIDEGAP3METHODS',  # 존재하지 않음
+            #     'type': 'bearish',
+            #     'desc': '상승 갭 삼법 - 상승 추세 후 하락 반전'
+            # },
+            'DOWNSIDE_GAP_THREE_METHODS': {
+                'func_name': 'CDLDOWNSIDEGAP3METHODS',
+                'type': 'bullish',
+                'desc': '하락 갭 삼법 - 하락 추세 후 상승 반전'
+            },
+            'UNIQUE_THREE_RIVER': {
+                'func_name': 'CDLUNIQUE3RIVER',
+                'type': 'bullish',
+                'desc': '특이 삼강 - 하락 추세에서 반전 신호'
+            },
+            'THREE_STARS_IN_SOUTH': {
+                'func_name': 'CDL3STARSINSOUTH',
+                'type': 'bullish',
+                'desc': '남쪽 삼성 - 하락 추세에서 강한 반전 신호'
+            },
+            'ABANDONED_BABY': {
+                'func_name': 'CDLABANDONEDBABY',
+                'type': 'dynamic',
+                'desc': '버려진 아기 - 매우 강한 반전 신호'
+            },
+            'ADVANCE_BLOCK': {
+                'func_name': 'CDLADVANCEBLOCK',
+                'type': 'bearish',
+                'desc': '전진 차단 - 상승 추세 약화 신호'
+            },
+            'BELT_HOLD': {
+                'func_name': 'CDLBELTHOLD',
+                'type': 'dynamic',
+                'desc': '띠 보유 - 강한 추세 신호'
+            },
+            'CLOSING_MARUBOZU': {
+                'func_name': 'CDLCLOSINGMARUBOZU',
+                'type': 'dynamic',
+                'desc': '종가 장대봉 - 강한 추세 지속 신호'
+            },
+            'CONCEALING_BABY_SWALLOW': {
+                'func_name': 'CDLCONCEALINGBABYSWALLOW',
+                'type': 'bearish',
+                'desc': '숨겨진 제비 - 상승 추세 후 하락 반전'
+            },
+            'COUNTERATTACK': {
+                'func_name': 'CDLCOUNTERATTACK',
+                'type': 'dynamic',
+                'desc': '반격 - 추세 반전 신호'
+            },
+            'DOJI_STAR': {
+                'func_name': 'CDLDOJISTAR',
+                'type': 'neutral',
+                'desc': '도지 별 - 불확실성 증가'
+            },
+            'GAPSIDE_SIDE_WHITE': {
+                'func_name': 'CDLGAPSIDESIDEWHITE',
+                'type': 'neutral',
+                'desc': '갭 사이드 사이드 화이트 - 중립 신호'
+            },
+            'HARAMI_CROSS': {
+                'func_name': 'CDLHARAMICROSS',
+                'type': 'dynamic',
+                'desc': '하라미 크로스 - 반전 신호'
+            },
+            'HIGH_WAVE': {
+                'func_name': 'CDLHIGHWAVE',
+                'type': 'neutral',
+                'desc': '높은 파도 - 불확실성 증가'
+            },
+            'HOMING_PIGEON': {
+                'func_name': 'CDLHOMINGPIGEON',
+                'type': 'bullish',
+                'desc': '귀향 비둘기 - 하락 추세에서 반전 신호'
+            },
+            'IDENTICAL_THREE_CROWS': {
+                'func_name': 'CDLIDENTICAL3CROWS',
+                'type': 'bearish',
+                'desc': '동일한 세 까마귀 - 강한 하락 신호'
+            },
+            'IN_NECK': {
+                'func_name': 'CDLINNECK',
+                'type': 'bearish',
+                'desc': '목 안쪽 - 하락 추세 지속 신호'
+            },
+            'LADDER_BOTTOM': {
+                'func_name': 'CDLLADDERBOTTOM',
+                'type': 'bullish',
+                'desc': '사다리 바닥 - 하락 추세에서 반전 신호'
+            },
+            'LONG_LEGGED_DOJI': {
+                'func_name': 'CDLLONGLEGGEDDOJI',
+                'type': 'neutral',
+                'desc': '긴 다리 도지 - 불확실성 증가'
+            },
+            'LONG_LINE': {
+                'func_name': 'CDLLONGLINE',
+                'type': 'dynamic',
+                'desc': '긴 선 - 강한 추세 신호'
+            },
+            'MATCHING_LOW': {
+                'func_name': 'CDLMATCHINGLOW',
+                'type': 'bullish',
+                'desc': '일치하는 저점 - 하락 추세에서 반전 신호'
+            },
+            'ON_NECK': {
+                'func_name': 'CDLONNECK',
+                'type': 'bearish',
+                'desc': '목 위 - 하락 추세 지속 신호'
+            },
+            'RICKSHAW_MAN': {
+                'func_name': 'CDLRICKSHAWMAN',
+                'type': 'neutral',
+                'desc': '인력거꾼 - 불확실성 증가'
+            },
+            'RISING_FALLING_THREE': {
+                'func_name': 'CDLRISEFALL3METHODS',
+                'type': 'dynamic',
+                'desc': '상승 하락 삼법 - 추세 지속 신호'
+            },
+            'SEPARATING_LINES': {
+                'func_name': 'CDLSEPARATINGLINES',
+                'type': 'dynamic',
+                'desc': '분리선 - 추세 반전 신호'
+            },
+            'SHORT_LINE': {
+                'func_name': 'CDLSHORTLINE',
+                'type': 'neutral',
+                'desc': '짧은 선 - 약한 신호'
+            },
+            'STALLED_PATTERN': {
+                'func_name': 'CDLSTALLEDPATTERN',
+                'type': 'bearish',
+                'desc': '정지 패턴 - 상승 추세 약화 신호'
+            },
+            'STICK_SANDWICH': {
+                'func_name': 'CDLSTICKSANDWICH',
+                'type': 'bullish',
+                'desc': '막대 샌드위치 - 하락 추세에서 반전 신호'
+            },
+            'TAKURI': {
+                'func_name': 'CDLTAKURI',
+                'type': 'bullish',
+                'desc': '타쿠리 - 하락 추세에서 반전 신호'
+            },
+            'TASUKI_GAP': {
+                'func_name': 'CDLTASUKIGAP',
+                'type': 'dynamic',
+                'desc': '타스키 갭 - 추세 지속 신호'
+            },
+            'THRUSTING': {
+                'func_name': 'CDLTHRUSTING',
+                'type': 'bearish',
+                'desc': '밀어내기 - 상승 추세 약화 신호'
+            },
+            'TRISTAR': {
+                'func_name': 'CDLTRISTAR',
+                'type': 'dynamic',
+                'desc': '삼성 - 반전 신호'
+            },
+            'UNIQUE_THREE_MOUNTAINS': {
+                'func_name': 'CDLUNIQUE3MOUNTAINS',
+                'type': 'bearish',
+                'desc': '특이 삼산 - 상승 추세 후 하락 반전'
+            },
+            'UPSIDE_TASUKI_GAP': {
+                'func_name': 'CDLUPSIDETASUKIGAP',
+                'type': 'bullish',
+                'desc': '상승 타스키 갭 - 상승 추세 지속 신호'
+            },
+            'DOWNSIDE_TASUKI_GAP': {
+                'func_name': 'CDLDOWNSIDETASUKIGAP',
+                'type': 'bearish',
+                'desc': '하락 타스키 갭 - 하락 추세 지속 신호'
             }
         }
+        
+        # 실제로 존재하는 패턴만 필터링 (안전한 방식)
+        available_patterns = {}
+        for pattern_name, pattern_info in pattern_definitions.items():
+            try:
+                # func_name을 사용하여 안전하게 함수 가져오기
+                func_name = pattern_info.get('func_name')
+                if func_name and hasattr(talib, func_name):
+                    # 실제 함수 객체를 가져와서 저장
+                    pattern_info['func'] = getattr(talib, func_name)
+                    available_patterns[pattern_name] = pattern_info
+                else:
+                    self.logger.debug(f"패턴 함수 {func_name}가 TA-Lib에 없습니다. 건너뜁니다.")
+            except Exception as e:
+                self.logger.warning(f"패턴 {pattern_name} 확인 중 오류: {e}. 건너뜁니다.")
+        
+        self.logger.info(f"사용 가능한 패턴 수: {len(available_patterns)}/{len(pattern_definitions)}")
+        return available_patterns
 
     def detect_all_patterns(self, df: pd.DataFrame) -> pd.DataFrame:
         """모든 캔들스틱 패턴 감지
@@ -182,6 +414,15 @@ class PatternRecognition:
             return df
 
         result = df.copy()
+        
+        # 패턴 함수가 없으면 (TA-Lib이 없는 경우) 빈 DataFrame 반환
+        if not self.pattern_functions:
+            self.logger.warning("패턴 함수가 없습니다. TA-Lib이 설치되어 있는지 확인하세요.")
+            result['BULLISH_PATTERNS'] = 0
+            result['BEARISH_PATTERNS'] = 0
+            result['PATTERN_STRENGTH'] = 0
+            return result
+        
         try:
             # 모든 패턴 함수 적용
             for pattern_name, pattern_info in self.pattern_functions.items():
@@ -224,6 +465,15 @@ class PatternRecognition:
             return df
 
         result = df.copy()
+        
+        # 패턴 함수가 없으면 (TA-Lib이 없는 경우) 빈 DataFrame 반환
+        if not self.pattern_functions:
+            self.logger.warning("패턴 함수가 없습니다. TA-Lib이 설치되어 있는지 확인하세요.")
+            result['BULLISH_PATTERNS'] = 0
+            result['BEARISH_PATTERNS'] = 0
+            result['PATTERN_STRENGTH'] = 0
+            return result
+        
         try:
             # 패턴 유형에 따라 필터링
             if pattern_type == 'all':
@@ -286,7 +536,11 @@ class PatternRecognition:
 
             # 추세 확인 (3일 이동평균 방향)
             if 'MA_3' not in result.columns:
-                result['MA_3'] = talib.SMA(result['close'], timeperiod=3)
+                if TALIB_AVAILABLE and talib is not None:
+                    result['MA_3'] = talib.SMA(result['close'], timeperiod=3)
+                else:
+                    # TA-Lib이 없으면 pandas로 계산
+                    result['MA_3'] = result['close'].rolling(window=3).mean()
 
                 # 추세 방향 (1: 상승, -1: 하락, 0: 중립)
             result['TREND_DIRECTION'] = np.sign(result['MA_3'].diff())
@@ -704,7 +958,7 @@ class PatternRecognition:
 
                                     # 목선 기울기 - Timedelta를 일수로 변환
                                     try:
-                                        days_diff = self._to_days(right_trough_idx - left_trough_idx)
+                                        days_diff = _to_days(right_trough_idx - left_trough_idx)
 
                                         if days_diff > 0:
                                             slope = (right_trough - left_trough) / days_diff
@@ -911,6 +1165,374 @@ class PatternRecognition:
             self.logger.error(f"변동성 패턴 감지 중 오류 발생: {e}")
 
         return result
+    
+    def detect_indicator_patterns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """기술적 지표 기반 패턴 감지 (RSI 다이버전스, MACD 다이버전스, 볼륨 패턴 등)
+        
+        Args:
+            df: OHLCV 데이터프레임 (기술적 지표 포함)
+            
+        Returns:
+            지표 패턴이 추가된 데이터프레임
+        """
+        if not self._validate_dataframe(df):
+            return df
+        
+        result = df.copy()
+        
+        try:
+            # RSI 계산 (없는 경우)
+            if 'RSI_14' not in result.columns:
+                if TALIB_AVAILABLE and talib is not None:
+                    result['RSI_14'] = talib.RSI(result['close'], timeperiod=14)
+                else:
+                    # TA-Lib이 없으면 수동 계산
+                    delta = result['close'].diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    rs = gain / loss
+                    result['RSI_14'] = 100 - (100 / (1 + rs))
+            
+            # MACD 계산 (없는 경우)
+            if 'MACD' not in result.columns or 'MACD_signal' not in result.columns:
+                if TALIB_AVAILABLE and talib is not None:
+                    macd, signal, hist = talib.MACD(result['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+                    result['MACD'] = macd
+                    result['MACD_signal'] = signal
+                    result['MACD_hist'] = hist
+                else:
+                    # TA-Lib이 없으면 수동 계산
+                    ema12 = result['close'].ewm(span=12, adjust=False).mean()
+                    ema26 = result['close'].ewm(span=26, adjust=False).mean()
+                    result['MACD'] = ema12 - ema26
+                    result['MACD_signal'] = result['MACD'].ewm(span=9, adjust=False).mean()
+                    result['MACD_hist'] = result['MACD'] - result['MACD_signal']
+            
+            # RSI 다이버전스 감지
+            result['RSI_BULLISH_DIVERGENCE'] = self._detect_rsi_divergence(result, bullish=True)
+            result['RSI_BEARISH_DIVERGENCE'] = self._detect_rsi_divergence(result, bullish=False)
+            
+            # MACD 다이버전스 감지
+            result['MACD_BULLISH_DIVERGENCE'] = self._detect_macd_divergence(result, bullish=True)
+            result['MACD_BEARISH_DIVERGENCE'] = self._detect_macd_divergence(result, bullish=False)
+            
+            # MACD 크로스오버
+            result['MACD_GOLDEN_CROSS'] = ((result['MACD'] > result['MACD_signal']) & 
+                                          (result['MACD'].shift(1) <= result['MACD_signal'].shift(1))).astype(int)
+            result['MACD_DEATH_CROSS'] = ((result['MACD'] < result['MACD_signal']) & 
+                                         (result['MACD'].shift(1) >= result['MACD_signal'].shift(1))).astype(int)
+            
+            # RSI 과매수/과매도
+            result['RSI_OVERSOLD'] = (result['RSI_14'] < 30).astype(int)
+            result['RSI_OVERBOUGHT'] = (result['RSI_14'] > 70).astype(int)
+            
+            # 볼륨 패턴 감지
+            result = self._detect_volume_patterns(result)
+            
+            self.logger.info("기술적 지표 기반 패턴 감지 완료")
+        except Exception as e:
+            self.logger.error(f"지표 패턴 감지 중 오류 발생: {e}")
+        
+        return result
+    
+    def _detect_rsi_divergence(self, df: pd.DataFrame, bullish: bool = True, window: int = 20) -> pd.Series:
+        """RSI 다이버전스 감지
+        
+        Args:
+            df: OHLCV 데이터프레임 (RSI 포함)
+            bullish: True면 상승 다이버전스, False면 하락 다이버전스
+            window: 분석 기간
+            
+        Returns:
+            다이버전스 감지 시리즈
+        """
+        result = pd.Series(0, index=df.index)
+        
+        if 'RSI_14' not in df.columns:
+            return result
+        
+        for i in range(window * 2, len(df)):
+            window_data = df.iloc[i - window * 2:i]
+            
+            if bullish:
+                # 상승 다이버전스: 가격은 하락하지만 RSI는 상승
+                price_lows = window_data['low'].nsmallest(2)
+                rsi_lows = window_data.loc[price_lows.index]['RSI_14']
+                
+                if len(price_lows) >= 2 and len(rsi_lows) >= 2:
+                    price_trend = price_lows.iloc[-1] - price_lows.iloc[0]  # 음수 (하락)
+                    rsi_trend = rsi_lows.iloc[-1] - rsi_lows.iloc[0]  # 양수 (상승)
+                    
+                    if price_trend < 0 and rsi_trend > 0:
+                        result.iloc[i] = 1
+            else:
+                # 하락 다이버전스: 가격은 상승하지만 RSI는 하락
+                price_highs = window_data['high'].nlargest(2)
+                rsi_highs = window_data.loc[price_highs.index]['RSI_14']
+                
+                if len(price_highs) >= 2 and len(rsi_highs) >= 2:
+                    price_trend = price_highs.iloc[-1] - price_highs.iloc[0]  # 양수 (상승)
+                    rsi_trend = rsi_highs.iloc[-1] - rsi_highs.iloc[0]  # 음수 (하락)
+                    
+                    if price_trend > 0 and rsi_trend < 0:
+                        result.iloc[i] = 1
+        
+        return result
+    
+    def _detect_macd_divergence(self, df: pd.DataFrame, bullish: bool = True, window: int = 20) -> pd.Series:
+        """MACD 다이버전스 감지
+        
+        Args:
+            df: OHLCV 데이터프레임 (MACD 포함)
+            bullish: True면 상승 다이버전스, False면 하락 다이버전스
+            window: 분석 기간
+            
+        Returns:
+            다이버전스 감지 시리즈
+        """
+        result = pd.Series(0, index=df.index)
+        
+        if 'MACD' not in df.columns:
+            return result
+        
+        for i in range(window * 2, len(df)):
+            window_data = df.iloc[i - window * 2:i]
+            
+            if bullish:
+                # 상승 다이버전스: 가격은 하락하지만 MACD는 상승
+                price_lows = window_data['low'].nsmallest(2)
+                macd_lows = window_data.loc[price_lows.index]['MACD']
+                
+                if len(price_lows) >= 2 and len(macd_lows) >= 2:
+                    price_trend = price_lows.iloc[-1] - price_lows.iloc[0]  # 음수 (하락)
+                    macd_trend = macd_lows.iloc[-1] - macd_lows.iloc[0]  # 양수 (상승)
+                    
+                    if price_trend < 0 and macd_trend > 0:
+                        result.iloc[i] = 1
+            else:
+                # 하락 다이버전스: 가격은 상승하지만 MACD는 하락
+                price_highs = window_data['high'].nlargest(2)
+                macd_highs = window_data.loc[price_highs.index]['MACD']
+                
+                if len(price_highs) >= 2 and len(macd_highs) >= 2:
+                    price_trend = price_highs.iloc[-1] - price_highs.iloc[0]  # 양수 (상승)
+                    macd_trend = macd_highs.iloc[-1] - macd_highs.iloc[0]  # 음수 (하락)
+                    
+                    if price_trend > 0 and macd_trend < 0:
+                        result.iloc[i] = 1
+        
+        return result
+    
+    def _detect_volume_patterns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """볼륨 패턴 감지
+        
+        Args:
+            df: OHLCV 데이터프레임
+            
+        Returns:
+            볼륨 패턴이 추가된 데이터프레임
+        """
+        result = df.copy()
+        
+        if 'volume' not in result.columns:
+            return result
+        
+        try:
+            # 평균 볼륨 계산
+            result['VOL_MA_20'] = result['volume'].rolling(20).mean()
+            
+            # 볼륨 스파이크 (평균의 2배 이상)
+            result['VOLUME_SPIKE'] = (result['volume'] > 2 * result['VOL_MA_20']).astype(int)
+            
+            # 볼륨 클라이맥스 (평균의 3배 이상)
+            result['VOLUME_CLIMAX'] = (result['volume'] > 3 * result['VOL_MA_20']).astype(int)
+            
+            # 볼륨 다이버전스 (가격 상승 + 볼륨 감소 = 약세)
+            result['VOLUME_BEARISH_DIVERGENCE'] = (
+                (result['close'] > result['close'].shift(5)) & 
+                (result['volume'] < result['volume'].shift(5))
+            ).astype(int)
+            
+            # 볼륨 다이버전스 (가격 하락 + 볼륨 감소 = 강세)
+            result['VOLUME_BULLISH_DIVERGENCE'] = (
+                (result['close'] < result['close'].shift(5)) & 
+                (result['volume'] < result['volume'].shift(5))
+            ).astype(int)
+            
+            # 누적 볼륨 패턴 (OBV 기반)
+            result['OBV'] = (np.sign(result['close'].diff()) * result['volume']).fillna(0).cumsum()
+            result['OBV_MA'] = result['OBV'].rolling(20).mean()
+            result['OBV_BULLISH'] = (result['OBV'] > result['OBV_MA']).astype(int)
+            result['OBV_BEARISH'] = (result['OBV'] < result['OBV_MA']).astype(int)
+            
+        except Exception as e:
+            self.logger.error(f"볼륨 패턴 감지 중 오류: {e}")
+        
+        return result
+    
+    def detect_trend_patterns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """추세 패턴 감지 (플래그, 페넌트, 쐐기, 채널, 컵앤핸들)
+        
+        Args:
+            df: OHLCV 데이터프레임
+            
+        Returns:
+            추세 패턴이 추가된 데이터프레임
+        """
+        if not self._validate_dataframe(df):
+            return df
+        
+        result = df.copy()
+        
+        try:
+            # 플래그 패턴 (Flag)
+            result['FLAG_PATTERN'] = self._detect_flag_pattern(result)
+            
+            # 페넌트 패턴 (Pennant)
+            result['PENNANT_PATTERN'] = self._detect_pennant_pattern(result)
+            
+            # 쐐기 패턴 (Wedge)
+            result['WEDGE_PATTERN'] = self._detect_wedge_pattern(result)
+            
+            # 채널 패턴 (Channel)
+            result['CHANNEL_PATTERN'] = self._detect_channel_pattern(result)
+            
+            # 컵 앤 핸들 패턴 (Cup and Handle)
+            result['CUP_AND_HANDLE'] = self._detect_cup_and_handle(result)
+            
+            self.logger.info("추세 패턴 감지 완료")
+        except Exception as e:
+            self.logger.error(f"추세 패턴 감지 중 오류 발생: {e}")
+        
+        return result
+    
+    def _detect_flag_pattern(self, df: pd.DataFrame, window: int = 20) -> pd.Series:
+        """플래그 패턴 감지 (강한 추세 후 수렴형 정리)"""
+        result = pd.Series(0, index=df.index)
+        
+        for i in range(window * 2, len(df)):
+            # 이전 기간: 강한 추세 (플래그 폴)
+            trend_period = df.iloc[i - window * 2:i - window]
+            # 최근 기간: 수렴형 정리 (플래그)
+            flag_period = df.iloc[i - window:i]
+            
+            # 추세 기간의 변동성
+            trend_volatility = trend_period['high'].max() - trend_period['low'].min()
+            # 플래그 기간의 변동성
+            flag_volatility = flag_period['high'].max() - flag_period['low'].min()
+            
+            # 플래그는 추세보다 변동성이 작아야 함
+            if trend_volatility > 0 and flag_volatility / trend_volatility < 0.5:
+                # 수렴하는 고점과 저점 확인
+                flag_highs = flag_period['high'].rolling(5).max()
+                flag_lows = flag_period['low'].rolling(5).min()
+                
+                # 고점은 하락, 저점은 상승 (수렴)
+                if len(flag_highs) >= 5 and len(flag_lows) >= 5:
+                    high_slope = (flag_highs.iloc[-1] - flag_highs.iloc[0]) / len(flag_highs)
+                    low_slope = (flag_lows.iloc[-1] - flag_lows.iloc[0]) / len(flag_lows)
+                    
+                    # 수렴 조건: 고점 하락, 저점 상승
+                    if high_slope < 0 and low_slope > 0:
+                        result.iloc[i] = 1
+        
+        return result
+    
+    def _detect_pennant_pattern(self, df: pd.DataFrame, window: int = 20) -> pd.Series:
+        """페넌트 패턴 감지 (플래그와 유사하지만 더 작은 삼각형)"""
+        # 플래그와 유사하지만 더 작은 범위
+        return self._detect_flag_pattern(df, window=int(window * 0.7))
+    
+    def _detect_wedge_pattern(self, df: pd.DataFrame, window: int = 30) -> pd.Series:
+        """쐐기 패턴 감지 (상승 쐐기: 하락 신호, 하락 쐐기: 상승 신호)"""
+        result = pd.Series(0, index=df.index)
+        
+        for i in range(window, len(df)):
+            window_data = df.iloc[i - window:i]
+            
+            # 고점과 저점 추출
+            highs = window_data[(window_data['high'] > window_data['high'].shift(1)) & 
+                               (window_data['high'] > window_data['high'].shift(-1))]['high']
+            lows = window_data[(window_data['low'] < window_data['low'].shift(1)) & 
+                              (window_data['low'] < window_data['low'].shift(-1))]['low']
+            
+            if len(highs) >= 3 and len(lows) >= 3:
+                # 추세선 계산
+                x_high = np.array(range(len(highs)))
+                x_low = np.array(range(len(lows)))
+                
+                slope_high, _ = np.polyfit(x_high, highs.values, 1)
+                slope_low, _ = np.polyfit(x_low, lows.values, 1)
+                
+                # 상승 쐐기: 두 추세선이 수렴하며 상승 (하락 신호)
+                if slope_high > 0 and slope_low > 0 and abs(slope_high - slope_low) < abs(slope_high) * 0.3:
+                    result.iloc[i] = -1  # 하락 신호
+                # 하락 쐐기: 두 추세선이 수렴하며 하락 (상승 신호)
+                elif slope_high < 0 and slope_low < 0 and abs(slope_high - slope_low) < abs(slope_high) * 0.3:
+                    result.iloc[i] = 1  # 상승 신호
+        
+        return result
+    
+    def _detect_channel_pattern(self, df: pd.DataFrame, window: int = 30) -> pd.Series:
+        """채널 패턴 감지 (상승 채널, 하락 채널, 횡보 채널)"""
+        result = pd.Series(0, index=df.index)
+        
+        for i in range(window, len(df)):
+            window_data = df.iloc[i - window:i]
+            
+            # 고점과 저점 추출
+            highs = window_data['high'].rolling(5).max()
+            lows = window_data['low'].rolling(5).min()
+            
+            if len(highs) >= 10 and len(lows) >= 10:
+                # 추세선 계산
+                x = np.array(range(len(highs)))
+                slope_high, intercept_high = np.polyfit(x, highs.values, 1)
+                slope_low, intercept_low = np.polyfit(x, lows.values, 1)
+                
+                # 채널 폭이 일정하고 추세가 명확한 경우
+                channel_width = (intercept_high - intercept_low) / window_data['close'].mean()
+                
+                if 0.02 < channel_width < 0.1:  # 채널 폭이 적절한 범위
+                    # 상승 채널
+                    if slope_high > 0 and slope_low > 0:
+                        result.iloc[i] = 1
+                    # 하락 채널
+                    elif slope_high < 0 and slope_low < 0:
+                        result.iloc[i] = -1
+        
+        return result
+    
+    def _detect_cup_and_handle(self, df: pd.DataFrame, window: int = 50) -> pd.Series:
+        """컵 앤 핸들 패턴 감지 (상승 신호)"""
+        result = pd.Series(0, index=df.index)
+        
+        for i in range(window * 2, len(df)):
+            # 컵 기간 (전반부)
+            cup_period = df.iloc[i - window * 2:i - window]
+            # 핸들 기간 (후반부)
+            handle_period = df.iloc[i - window:i]
+            
+            if len(cup_period) >= 20 and len(handle_period) >= 10:
+                # 컵의 좌우 높이가 비슷해야 함
+                cup_left = cup_period.iloc[:len(cup_period)//2]['high'].max()
+                cup_right = cup_period.iloc[len(cup_period)//2:]['high'].max()
+                cup_bottom = cup_period['low'].min()
+                
+                # 컵의 좌우 높이 차이가 10% 이내
+                if abs(cup_left - cup_right) / cup_left < 0.1:
+                    # 핸들은 컵의 상단부에서 작은 조정
+                    handle_top = handle_period['high'].max()
+                    handle_bottom = handle_period['low'].min()
+                    
+                    # 핸들이 컵 상단 근처에 있고, 작은 조정인 경우
+                    if (cup_left * 0.95 < handle_top < cup_left * 1.05 and 
+                        (handle_top - handle_bottom) / cup_left < 0.1):
+                        # 현재 가격이 핸들 상단을 돌파하면 패턴 완성
+                        if df.iloc[i]['close'] > handle_top:
+                            result.iloc[i] = 1
+        
+        return result
 
     def get_all_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """모든 패턴 감지 및 종합 신호 생성
@@ -936,19 +1558,30 @@ class PatternRecognition:
 
             # 4. 변동성 패턴 감지
             result = self.detect_volatility_patterns(result)
+            
+            # 5. 기술적 지표 기반 패턴 감지
+            result = self.detect_indicator_patterns(result)
+            
+            # 6. 추세 패턴 감지
+            result = self.detect_trend_patterns(result)
 
-            # 5. 패턴 설명 추가
+            # 7. 패턴 설명 추가
             result = self.get_pattern_descriptions(result)
 
-            # 6. 매매 신호 추가
+            # 8. 매매 신호 추가
             result = self.get_pattern_signals(result)
 
-            # 7. 종합 매수/매도 신호 생성
+            # 9. 종합 매수/매도 신호 생성
             bull_columns = ['CONFIRMED_BUY_SIGNAL', 'DOUBLE_BOTTOM', 'INVERSE_HEAD_AND_SHOULDERS',
-                            'GOLDEN_CROSS', 'RESISTANCE_BREAKOUT']
+                            'GOLDEN_CROSS', 'RESISTANCE_BREAKOUT', 'RSI_BULLISH_DIVERGENCE',
+                            'MACD_BULLISH_DIVERGENCE', 'MACD_GOLDEN_CROSS', 'RSI_OVERSOLD',
+                            'CUP_AND_HANDLE', 'WEDGE_PATTERN', 'FLAG_PATTERN', 'PENNANT_PATTERN',
+                            'CHANNEL_PATTERN', 'VOLUME_BULLISH_DIVERGENCE', 'OBV_BULLISH']
 
             bear_columns = ['CONFIRMED_SELL_SIGNAL', 'DOUBLE_TOP', 'HEAD_AND_SHOULDERS',
-                            'DEATH_CROSS', 'SUPPORT_BREAKOUT']
+                            'DEATH_CROSS', 'SUPPORT_BREAKOUT', 'RSI_BEARISH_DIVERGENCE',
+                            'MACD_BEARISH_DIVERGENCE', 'MACD_DEATH_CROSS', 'RSI_OVERBOUGHT',
+                            'VOLUME_BEARISH_DIVERGENCE', 'OBV_BEARISH']
 
             # 존재하는 컬럼만 사용
             bull_cols = [col for col in bull_columns if col in result.columns]

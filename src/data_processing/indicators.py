@@ -2,9 +2,23 @@
 
 import pandas as pd
 import numpy as np
-import talib
 from src.utils.logger import get_logger
 from typing import Union, List, Dict, Optional
+
+# TA-Lib import (안전한 처리)
+try:
+    import talib
+    TALIB_AVAILABLE = True
+except ImportError as e:
+    TALIB_AVAILABLE = False
+    import warnings
+    warnings.warn(
+        f"TA-Lib을 import할 수 없습니다: {e}\n"
+        "기술적 지표 기능이 제한됩니다. TA-Lib을 설치하세요:\n"
+        "  pip install TA-Lib\n"
+        "또는 Windows의 경우 wheel 파일을 사용하세요.",
+        ImportWarning
+    )
 
 
 class TechnicalIndicators:
@@ -47,6 +61,10 @@ class TechnicalIndicators:
             지표가 추가된 데이터프레임
         """
         if not self._validate_dataframe(df):
+            return df
+
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 이동평균선을 계산할 수 없습니다.")
             return df
 
         result = df.copy()
@@ -111,6 +129,10 @@ class TechnicalIndicators:
         if not self._validate_dataframe(df):
             return df
 
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 RSI를 계산할 수 없습니다.")
+            return df
+
         result = df.copy()
         try:
             for period in periods:
@@ -135,6 +157,10 @@ class TechnicalIndicators:
             지표가 추가된 데이터프레임
         """
         if not self._validate_dataframe(df):
+            return df
+
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 MACD를 계산할 수 없습니다.")
             return df
 
         result = df.copy()
@@ -170,6 +196,10 @@ class TechnicalIndicators:
             지표가 추가된 데이터프레임
         """
         if not self._validate_dataframe(df):
+            return df
+
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 스토캐스틱을 계산할 수 없습니다.")
             return df
 
         result = df.copy()
@@ -208,6 +238,10 @@ class TechnicalIndicators:
         if not self._validate_dataframe(df):
             return df
 
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 ATR을 계산할 수 없습니다.")
+            return df
+
         result = df.copy()
         try:
             result[f'ATR_{period}'] = talib.ATR(
@@ -237,6 +271,10 @@ class TechnicalIndicators:
             지표가 추가된 데이터프레임
         """
         if not self._validate_dataframe(df):
+            return df
+
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 ADX를 계산할 수 없습니다.")
             return df
 
         result = df.copy()
@@ -327,6 +365,10 @@ class TechnicalIndicators:
             지표가 추가된 데이터프레임
         """
         if not self._validate_dataframe(df):
+            return df
+
+        if not TALIB_AVAILABLE:
+            self.logger.error("TA-Lib이 설치되지 않아 거래량 지표를 계산할 수 없습니다.")
             return df
 
         result = df.copy()

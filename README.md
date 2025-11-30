@@ -12,41 +12,71 @@
 
 ## 설치 방법
 
-1. 저장소 클론
-git clone https://github.com/yourusername/Quant_Trading_Binance_Spot.git
-cd Quant_Trading_Binance_Spot
+### 빠른 설치 (권장)
 
-markdown
+```bash
+# 1. 가상 환경 생성 및 활성화
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# 또는
+source .venv/bin/activate  # Linux/Mac
 
-2. 가상 환경 생성 및 활성화
-python -m venv venv
-source venv/bin/activate # Linux/Mac
-venv\Scripts\activate # Windows
+# 2. 의존성 자동 설치
+python install_dependencies.py
+```
 
-markdown
+### 수동 설치
 
-3. 의존성 설치
-pip install -e .
+```bash
+# 1. 가상 환경 생성 및 활성화
+python -m venv .venv
+.venv\Scripts\activate  # Windows
 
-markdown
+# 2. 필수 패키지 설치
+pip install websocket-client>=1.6.0
+pip install ta_lib-0.6.3-cp313-cp313-win_amd64.whl  # Windows wheel 파일
+pip install -r requirements.txt
 
-4. 환경 변수 설정
-`.env` 파일을 생성하고 필요한 API 키와 설정을 추가하세요.
+# 3. 환경 변수 설정
+# .env 파일을 생성하고 필요한 API 키와 설정을 추가하세요.
+```
+
+자세한 설치 가이드는 [INSTALL.md](INSTALL.md) 또는 [QUICK_START.md](QUICK_START.md)를 참조하세요.
+
+## API 키 설정
+
+**⚠️ 중요**: 실제 거래를 실행하려면 바이낸스 API 키 설정이 필요합니다.
+
+자세한 설정 방법은 [API_SETUP_GUIDE.md](API_SETUP_GUIDE.md)를 참조하세요.
 
 ## 사용 방법
 
-1. 데이터 수집
+### 기본 실행
+
+```bash
+# 메인 시스템 실행
+python main.py
+```
+
+### 테스트
+
+```bash
+# TA-Lib 설치 확인
+python test_talib.py
+
+# 전체 시스템 테스트
+python test_system.py
+```
+
+### 개별 모듈 실행
+
+```bash
+# 데이터 수집
 python -m src.data_collection.collectors
 
-markdown
-
-2. 전략 백테스트
-python -m src.strategy.backtest
-
-markdown
-
-3. 실시간 트레이딩
-python -m src.main
+# 전략 백테스트
+python -m src.backtesting.backtest_engine
+```
 
 ini
 

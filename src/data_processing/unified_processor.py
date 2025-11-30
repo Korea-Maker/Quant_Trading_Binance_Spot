@@ -11,6 +11,9 @@ from src.utils.logger import get_logger
 from src.data_processing.indicators import TechnicalIndicators
 from src.data_processing.pattern_recognition import PatternRecognition
 from src.data_processing.features import TradingSignalProcessor
+from src.data_processing.preprocessor import DataPreprocessor
+from src.risk_management.risk_checker import IntegratedRiskChecker, RiskCheckResult, RiskLevel
+from src.config.settings import TRADING_TYPE
 
 
 class DataProcessor(ABC):
@@ -48,9 +51,19 @@ class UnifiedDataProcessor(DataProcessor):
         # 지표 및 패턴 인식 모듈
         self.indicators = TechnicalIndicators()
         self.pattern_recognition = PatternRecognition()
+        
+        # 데이터 전처리 모듈
+        self.preprocessor = DataPreprocessor(
+            outlier_std_threshold=3.0,
+            missing_data_threshold=0.1,
+            enable_normalization=False
+        )
 
         # TradingSignalProcessor 초기화 - pattern_recognizer 인자 전달
         self.signal_processor = TradingSignalProcessor(self.pattern_recognition)
+
+        # 리스크 체커 초기화
+        self.risk_checker = IntegratedRiskChecker(trading_type=TRADING_TYPE)
 
         # 실시간 데이터 버퍼
         self.data_buffer = deque(maxlen=buffer_size)
@@ -160,17 +173,14 @@ class UnifiedDataProcessor(DataProcessor):
         Returns:
             전처리된 DataFrame
         """
-        # 결측치 처리 - deprecated 메서드 수정
-        df = df.ffill().bfill()  # fillna(method='ffill') 대신 ffill() 사용
-
-        # 이상치 제거
-        df = self._remove_outliers(df)
-
-        # 타임스탬프 인덱스 설정
-        if 'timestamp' in df.columns and not isinstance(df.index, pd.DatetimeIndex):
-            df.set_index('timestamp', inplace=True)
-
-        return df
+        # DataPreprocessor 사용
+        processed_df, stats = self.preprocessor.preprocess(df, validate=True)
+        
+        # 전처리 통계 로깅
+        if stats:
+            self.logger.debug(f"전처리 통계: {stats}")
+        
+        return processed_df
 
     def _update_buffer(self, data: Dict):
         """실시간 데이터 버퍼 업데이트
@@ -184,27 +194,6 @@ class UnifiedDataProcessor(DataProcessor):
 
         self.data_buffer.append(data)
         self.last_processed_time = data['timestamp']
-
-    def _preprocess_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """데이터 전처리
-
-        Args:
-            df: 원본 DataFrame
-
-        Returns:
-            전처리된 DataFrame
-        """
-        # 결측치 처리
-        df = df.ffill().bfill()
-
-        # 이상치 제거
-        df = self._remove_outliers(df)
-
-        # 타임스탬프 인덱스 설정
-        if 'timestamp' in df.columns and not isinstance(df.index, pd.DatetimeIndex):
-            df.set_index('timestamp', inplace=True)
-
-        return df
 
     def _remove_outliers(self, df: pd.DataFrame, std_threshold: float = 3.0) -> pd.DataFrame:
         """이상치 제거
@@ -321,21 +310,64 @@ class UnifiedDataProcessor(DataProcessor):
                 'stats': stats
             }
 
-            # 매수/매도 신호 확인
-            if 'BUY_RECOMMENDATION' in processed_data.columns and latest_data.get('BUY_RECOMMENDATION', 0) == 1:
+            # 신호 생성 로직 개선
+            # 1. BUY_RECOMMENDATION/SELL_RECOMMENDATION 확인
+            buy_rec = latest_data.get('BUY_RECOMMENDATION', 0) if 'BUY_RECOMMENDATION' in processed_data.columns else 0
+            sell_rec = latest_data.get('SELL_RECOMMENDATION', 0) if 'SELL_RECOMMENDATION' in processed_data.columns else 0
+            
+            # 2. COMBINED_SIGNAL 확인 (없으면 다른 신호 컬럼 확인)
+            combined_signal = latest_data.get('COMBINED_SIGNAL', 0)
+            if combined_signal == 0:
+                # 대체 신호 컬럼 확인
+                if 'CONFIRMED_BUY_SIGNAL' in processed_data.columns:
+                    combined_signal = latest_data.get('CONFIRMED_BUY_SIGNAL', 0) * 2.0
+                elif 'CONFIRMED_SELL_SIGNAL' in processed_data.columns:
+                    combined_signal = latest_data.get('CONFIRMED_SELL_SIGNAL', 0) * -2.0
+                elif 'PATTERN_BUY_SIGNAL' in processed_data.columns:
+                    combined_signal = latest_data.get('PATTERN_BUY_SIGNAL', 0) * 1.5
+                elif 'PATTERN_SELL_SIGNAL' in processed_data.columns:
+                    combined_signal = latest_data.get('PATTERN_SELL_SIGNAL', 0) * -1.5
+            
+            # 3. 신뢰도 계산
+            confidence = latest_data.get('SIGNAL_CONFIDENCE', 50)
+            if confidence == 50:  # 기본값이면 재계산 시도
+                # 패턴 기반 신뢰도
+                if 'BULLISH_PATTERNS' in processed_data.columns:
+                    bullish_count = latest_data.get('BULLISH_PATTERNS', 0)
+                    bearish_count = latest_data.get('BEARISH_PATTERNS', 0)
+                    if bullish_count > 0 or bearish_count > 0:
+                        confidence = 50 + min((bullish_count + bearish_count) * 10, 30)
+                # 신호 강도 기반 신뢰도
+                if abs(combined_signal) > 0:
+                    confidence = max(confidence, 50 + min(abs(combined_signal) * 10, 30))
+            
+            # 4. 신호 결정
+            if buy_rec == 1 or (combined_signal > 0 and confidence >= 50):
                 signals['primary_signal'] = 'BUY'
-                signals['signal_strength'] = latest_data.get('COMBINED_SIGNAL', 0)
-                signals['confidence'] = latest_data.get('SIGNAL_CONFIDENCE', 50)
-
-            elif 'SELL_RECOMMENDATION' in processed_data.columns and latest_data.get('SELL_RECOMMENDATION', 0) == 1:
+                signals['signal_strength'] = abs(combined_signal) if combined_signal > 0 else 1.0
+                signals['confidence'] = confidence
+            elif sell_rec == 1 or (combined_signal < 0 and confidence >= 50):
                 signals['primary_signal'] = 'SELL'
-                signals['signal_strength'] = latest_data.get('COMBINED_SIGNAL', 0)
-                signals['confidence'] = latest_data.get('SIGNAL_CONFIDENCE', 50)
+                signals['signal_strength'] = abs(combined_signal) if combined_signal < 0 else 1.0
+                signals['confidence'] = confidence
+            else:
+                # HOLD이지만 신호 강도와 신뢰도는 설정
+                signals['signal_strength'] = abs(combined_signal)
+                signals['confidence'] = confidence
 
+            # 디버깅: 신호 생성 정보 로깅
+            self.logger.debug(
+                f"신호 생성 디버깅: "
+                f"BUY_REC={buy_rec}, SELL_REC={sell_rec}, "
+                f"COMBINED_SIGNAL={combined_signal:.2f}, "
+                f"CONFIDENCE={confidence:.1f}%, "
+                f"최종신호={signals['primary_signal']}"
+            )
+            
             # 지표 정보
             for col in processed_data.columns:
-                if col in ['RSI_14', 'MACD', 'MA_20', 'MA_50', 'BB_upper_20', 'BB_lower_20']:
-                    signals['indicators'][col] = latest_data.get(col, 0)
+                if col in ['RSI_14', 'MACD', 'MA_20', 'MA_50', 'BB_upper_20', 'BB_lower_20', 'close']:
+                    signals['indicators'][col] = float(latest_data.get(col, 0))
 
             # 패턴 정보
             pattern_cols = [col for col in processed_data.columns if col.startswith('PATTERN_')]
@@ -487,22 +519,38 @@ class UnifiedDataProcessor(DataProcessor):
             output_queue: 출력 신호 큐
         """
         self.logger.info("실시간 스트림 처리 시작")
+        data_count = 0
 
         while True:
             try:
-                # 입력 큐에서 데이터 가져오기
+                # 입력 큐에서 데이터 가져오기 (타임아웃 없이 대기)
+                self.logger.debug("큐에서 데이터 대기 중...")
                 data = await input_queue.get()
+                data_count += 1
+                self.logger.info(f"큐에서 데이터 수신 (#{data_count}): {type(data)}")
 
                 # None이면 종료 신호
                 if data is None:
+                    self.logger.info("종료 신호 수신")
                     break
 
                 # 데이터 처리
+                self.logger.debug(f"데이터 처리 시작: {data.get('close', 'N/A') if isinstance(data, dict) else 'N/A'}")
                 processed = self._process_streaming_data(data)
 
                 # 처리된 데이터가 있으면 출력 큐에 추가
-                if processed and 'signals' in processed:
-                    await output_queue.put(processed['signals'])
+                if processed:
+                    if 'signals' in processed:
+                        signals = processed['signals']
+                        # 신호 딕셔너리에 전체 processed 데이터도 포함
+                        if isinstance(signals, dict):
+                            signals['processed_data'] = processed
+                        await output_queue.put(signals)
+                        self.logger.debug(f"신호 큐에 추가: {signals.get('primary_signal', 'HOLD')}")
+                    else:
+                        self.logger.warning("처리된 데이터에 신호가 없습니다.")
+                else:
+                    self.logger.debug("데이터 처리 결과가 None입니다.")
 
             except Exception as e:
                 self.logger.error(f"스트림 처리 중 오류: {e}")
@@ -588,11 +636,17 @@ class UnifiedDataProcessor(DataProcessor):
 
             # 버퍼에 추가
             self.data_buffer.append(data)
+            buffer_size = len(self.data_buffer)
+            
+            self.logger.info(f"버퍼에 데이터 추가됨: 현재 크기 {buffer_size}/{self.min_data_points}")
 
             # 최소 데이터 포인트 확인
-            if len(self.data_buffer) < self.min_data_points:
-                self.logger.debug(f"버퍼 크기 부족: {len(self.data_buffer)}/{self.min_data_points}")
+            if buffer_size < self.min_data_points:
+                if buffer_size % 10 == 0 or buffer_size <= 5:  # 10개마다 또는 처음 5개는 항상 로그
+                    self.logger.info(f"버퍼 수집 중: {buffer_size}/{self.min_data_points} (신호 생성 대기 중...)")
                 return None
+            
+            self.logger.info(f"[OK] 최소 데이터 포인트 충족: {buffer_size}/{self.min_data_points} - 신호 생성 시작")
 
             # 버퍼를 DataFrame으로 변환
             df = pd.DataFrame(list(self.data_buffer))
@@ -611,6 +665,19 @@ class UnifiedDataProcessor(DataProcessor):
 
             # 신호 생성
             signals = self.generate_signals(processed_df)
+            
+            # 신호 로깅
+            if signals:
+                primary_signal = signals.get('primary_signal', 'HOLD')
+                confidence = signals.get('confidence', 0)
+                signal_strength = signals.get('signal_strength', 0)
+                self.logger.info(
+                    f"신호 생성: {primary_signal} | "
+                    f"신뢰도: {confidence:.1f}% | "
+                    f"강도: {signal_strength:.2f}"
+                )
+            else:
+                self.logger.debug("신호 생성 실패 또는 HOLD")
 
             # 실시간 데이터에 신호 추가
             latest_processed['signals'] = signals
