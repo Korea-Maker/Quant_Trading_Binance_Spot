@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from src.config.settings import LOG_DIR, LOG_LEVEL, APP_MODE
 
+
 def get_logger(name):
     """로거 생성 함수
 
@@ -29,13 +30,20 @@ def get_logger(name):
     today = datetime.now().strftime('%Y-%m-%d')
     log_file = os.path.join(LOG_DIR, f"{today}_{name.replace('.', '_')}.log")
 
-    # 파일 핸들러
-    file_handler = logging.FileHandler(log_file)
+    # 파일 핸들러 - UTF-8 인코딩 명시
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setLevel(log_level)
 
-    # 콘솔 핸들러
+    # 콘솔 핸들러 - UTF-8 인코딩 명시
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
+
+    # Windows에서 콘솔 출력 시 UTF-8 지원을 위한 설정
+    if hasattr(console_handler.stream, 'reconfigure'):
+        try:
+            console_handler.stream.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
 
     # 포맷터 설정
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -51,8 +59,3 @@ def get_logger(name):
         logger.setLevel(logging.DEBUG)
 
     return logger
-
-# Test
-# if __name__ == "__main__":
-#     logger = get_logger("test_test_logger")
-#     logger.info("Test_Message")
