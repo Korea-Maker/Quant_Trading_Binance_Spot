@@ -20,6 +20,7 @@ from src.config.settings import TRADING_TYPE
 from src.strategy.base import BaseStrategy
 from src.monitoring.performance import PerformanceMonitor
 from src.monitoring.dashboard import TradingDashboard
+from src.risk_management import ExposureManager
 
 
 class RealtimeBacktestIntegration:
@@ -82,6 +83,9 @@ class RealtimeBacktestIntegration:
         self.order_manager: Optional[SpotOrderManager | FuturesOrderManager] = None
         self.strategy: Optional[BaseStrategy] = None
         self.total_capital: float = 10000.0  # 기본 자본
+        
+        # ExposureManager 초기화 (기본값 사용: max_total_exposure_pct=0.3, max_per_symbol_exposure_pct=0.1, max_concurrent_positions=5)
+        self.exposure_manager = ExposureManager()
         
         # 모니터링
         self.performance_monitor: Optional[PerformanceMonitor] = None
@@ -199,17 +203,24 @@ class RealtimeBacktestIntegration:
         self.logger.info(f"통합 시스템 시작: {self.symbol} {self.interval}")
 
         try:
-            # 주문 관리자 초기화 (거래 타입에 따라 선택)
+            # ExposureManager에 총 자본 설정
+            self.exposure_manager.set_total_capital(self.total_capital)
+            
+            # 주문 관리자 초기화 (거래 타입에 따라 선택, ExposureManager 전달)
             if TRADING_TYPE == 'futures':
                 self.order_manager = FuturesOrderManager(
                     symbol=self.symbol,
                     initial_leverage=5.0,  # 기본 레버리지 (필요시 설정에서 가져올 수 있음)
-                    position_type=PositionType.ISOLATED  # 격리 마진 모드
+                    position_type=PositionType.ISOLATED,  # 격리 마진 모드
+                    exposure_manager=self.exposure_manager
                 )
-                self.logger.info(f"선물 거래 주문 관리자 초기화: {self.symbol}")
+                self.logger.info(f"선물 거래 주문 관리자 초기화: {self.symbol} (ExposureManager 연동)")
             else:
-                self.order_manager = SpotOrderManager(symbol=self.symbol)
-                self.logger.info(f"스팟 거래 주문 관리자 초기화: {self.symbol}")
+                self.order_manager = SpotOrderManager(
+                    symbol=self.symbol,
+                    exposure_manager=self.exposure_manager
+                )
+                self.logger.info(f"스팟 거래 주문 관리자 초기화: {self.symbol} (ExposureManager 연동)")
             
             # 모니터링 초기화
             self.performance_monitor = PerformanceMonitor(initial_capital=total_capital)

@@ -143,11 +143,6 @@ class FuturesOrderManager:
         
         # ExposureManager 설정 (전달받거나 None)
         self.exposure_manager = exposure_manager
-        
-        # 레거시 호환성을 위한 설정 (점진적 제거 예정)
-        self.max_position_size = 0.1  # 총 자본의 10%
-        self.stop_loss_percentage = 0.02  # 2% 손절
-        self.take_profit_percentage = 0.05  # 5% 익절
 
         # 초기화 작업
         self._initialize_leverage()
@@ -596,13 +591,17 @@ class FuturesOrderManager:
                         side = OrderSide.LONG if position_amt > 0 else OrderSide.SHORT
                         entry_price = float(pos_data['entryPrice'])
                         
-                        # 손절/익절 가격 계산
-                        if side == OrderSide.LONG:
-                            stop_loss_price = entry_price * (1 - self.stop_loss_percentage)
-                            take_profit_price = entry_price * (1 + self.take_profit_percentage)
-                        else:  # SHORT
-                            stop_loss_price = entry_price * (1 + self.stop_loss_percentage)
-                            take_profit_price = entry_price * (1 - self.take_profit_percentage)
+                        # 손절/익절 가격 계산 (새 모듈 사용)
+                        side_str = 'LONG' if side == OrderSide.LONG else 'SHORT'
+                        stop_loss_price = self.stop_loss_manager.calculate_stop_loss(
+                            entry_price=entry_price,
+                            side=side_str,
+                            current_price=entry_price
+                        )
+                        take_profit_price = self.stop_loss_manager.calculate_take_profit(
+                            entry_price=entry_price,
+                            side=side_str
+                        )
                         
                         self.current_position = FuturesPosition(
                             symbol=self.symbol,

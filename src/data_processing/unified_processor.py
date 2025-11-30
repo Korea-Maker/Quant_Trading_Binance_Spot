@@ -64,6 +64,15 @@ class UnifiedDataProcessor(DataProcessor):
 
         # 리스크 체커 초기화
         self.risk_checker = IntegratedRiskChecker(trading_type=TRADING_TYPE)
+        
+        # 리스크 체크 결과 저장 (모니터링용)
+        self.risk_check_results: Dict[str, List[RiskCheckResult]] = {
+            'data_collection': [],
+            'preprocessing': [],
+            'indicators': [],
+            'pattern_recognition': [],
+            'signal_generation': []
+        }
 
         # 실시간 데이터 버퍼
         self.data_buffer = deque(maxlen=buffer_size)
@@ -137,29 +146,72 @@ class UnifiedDataProcessor(DataProcessor):
         """
         self.logger.info(f"배치 데이터 처리 시작: {len(df)} 행")
 
-        # 1. 기본 전처리
-        df = self._preprocess_data(df)
+        # 1. 데이터 수집 단계 리스크 체크
+        if len(df) > 0:
+            data_collection_risk_data = self._prepare_risk_check_data(df, 'data_collection')
+            data_collection_result = self.risk_checker.check_stage('data_collection', data_collection_risk_data)
+            if not self._handle_risk_check_result('data_collection', data_collection_result):
+                self.logger.error("데이터 수집 단계 리스크 체크 실패로 처리 중단")
+                return pd.DataFrame()
 
-        # 2. TradingSignalProcessor를 사용한 전체 처리
+        # 2. 기본 전처리
+        df = self._preprocess_data(df)
+        
+        if df.empty:
+            self.logger.warning("전처리 후 데이터가 비어있습니다.")
+            return pd.DataFrame()
+
+        # 3. 전처리 단계 리스크 체크
+        preprocessing_risk_data = self._prepare_risk_check_data(df, 'preprocessing')
+        preprocessing_result = self.risk_checker.check_stage('preprocessing', preprocessing_risk_data)
+        if not self._handle_risk_check_result('preprocessing', preprocessing_result):
+            self.logger.error("전처리 단계 리스크 체크 실패로 처리 중단")
+            return pd.DataFrame()
+
+        # 4. TradingSignalProcessor를 사용한 전체 처리
         # generate_indicators=False로 설정하여 중복 지표 계산 방지
         df = self.signal_processor.process_data(df, symbol="BTCUSDT", generate_indicators=False)
 
-        # 3. 기술적 지표 계산 (signal_processor에서 안했다면)
+        # 5. 기술적 지표 계산 (signal_processor에서 안했다면)
         if 'MA_20' not in df.columns:
             df = self.indicators.add_all_indicators(df)
 
-        # 4. 패턴 인식 (signal_processor에서 안했다면)
+        # 6. 기술지표 계산 단계 리스크 체크
+        if len(df) > 0:
+            indicators_risk_data = self._prepare_risk_check_data(df, 'indicators')
+            indicators_result = self.risk_checker.check_stage('indicators', indicators_risk_data)
+            if not self._handle_risk_check_result('indicators', indicators_result):
+                self.logger.error("기술지표 계산 단계 리스크 체크 실패로 처리 중단")
+                return pd.DataFrame()
+
+        # 7. 패턴 인식 (signal_processor에서 안했다면)
         if 'PATTERN_BULLISH_ENGULFING' not in df.columns:
             df = self.pattern_recognition.detect_all_patterns(df)
             df = self.pattern_recognition.find_chart_patterns(df)
             df = self.pattern_recognition.detect_advanced_patterns(df)
 
-        # 5. ML 특징 생성 (선택사항)
+        # 8. 패턴 인식 단계 리스크 체크
+        if len(df) > 0:
+            pattern_risk_data = self._prepare_risk_check_data(df, 'pattern_recognition')
+            pattern_result = self.risk_checker.check_stage('pattern_recognition', pattern_risk_data)
+            if not self._handle_risk_check_result('pattern_recognition', pattern_result):
+                self.logger.warning("패턴 인식 단계 리스크 체크 실패 (경고 후 계속)")
+
+        # 9. ML 특징 생성 (선택사항)
         if self.enable_ml_features:
             df = self._generate_ml_features(df)
 
-        # 6. 피드백 데이터 적용
+        # 10. 피드백 데이터 적용
         df = self._apply_feedback(df)
+
+        # 11. 신호 생성 단계 리스크 체크 (신호 생성 후)
+        if len(df) > 0:
+            # 신호 정보 추출
+            signals = self.generate_signals(df)
+            signal_risk_data = self._prepare_risk_check_data(df, 'signal_generation', additional_data=signals)
+            signal_result = self.risk_checker.check_stage('signal_generation', signal_risk_data)
+            if not self._handle_risk_check_result('signal_generation', signal_result):
+                self.logger.warning("신호 생성 단계 리스크 체크 실패 (경고 후 계속)")
 
         self.logger.info("배치 데이터 처리 완료")
         return df
@@ -181,6 +233,183 @@ class UnifiedDataProcessor(DataProcessor):
             self.logger.debug(f"전처리 통계: {stats}")
         
         return processed_df
+    
+    def _prepare_risk_check_data(self, df: pd.DataFrame, stage: str, 
+                                  additional_data: Optional[Dict] = None) -> Dict:
+        """각 단계별 리스크 체크 데이터 준비
+        
+        Args:
+            df: 현재 단계의 DataFrame
+            stage: 단계명 ('data_collection', 'preprocessing', 'indicators', 
+                          'pattern_recognition', 'signal_generation')
+            additional_data: 추가 데이터 (신호 정보 등)
+            
+        Returns:
+            리스크 체크용 데이터 딕셔너리
+        """
+        risk_data = {}
+        
+        if stage == 'data_collection':
+            # 데이터 수집 단계 체크
+            latest_price = df['close'].iloc[-1] if 'close' in df.columns and len(df) > 0 else None
+            risk_data = {
+                'price': float(latest_price) if latest_price is not None else None,
+                'connection_status': 'connected',  # 실제로는 연결 상태 확인 필요
+                'data_delay_ms': 0,  # 실제로는 계산 필요
+                'orderbook': {}  # 실제로는 수집 필요
+            }
+            
+        elif stage == 'preprocessing':
+            # 전처리 단계 체크
+            stats = self.preprocessor.get_preprocessing_stats()
+            missing_data = stats.get('missing_data', {})
+            outlier_data = stats.get('outliers', {})
+            consistency_data = stats.get('data_consistency', {})
+            
+            risk_data = {
+                'missing_data_count': missing_data.get('missing_before', 0),
+                'total_data_count': len(df),
+                'outlier_count': outlier_data.get('removed_count', 0),
+                'data_consistency': consistency_data.get('is_consistent', True)
+            }
+            
+        elif stage == 'indicators':
+            # 기술지표 계산 단계 체크
+            indicator_cols = [col for col in df.columns 
+                             if col in ['RSI_14', 'MACD', 'MA_20', 'MA_50', 
+                                       'BB_upper_20', 'BB_lower_20']]
+            indicators = {}
+            for col in indicator_cols:
+                if col in df.columns and len(df) > 0:
+                    val = df[col].iloc[-1]
+                    if pd.notna(val):
+                        # 지표 이름 정규화 (RSI_14 -> RSI, MA_20 -> MA 등)
+                        if 'RSI' in col:
+                            indicators['RSI'] = float(val)
+                        elif 'MACD' in col:
+                            indicators['MACD'] = float(val)
+                        elif 'MA' in col:
+                            indicators['MA'] = float(val)
+            
+            # 지표 신뢰도 계산 (NaN 비율 기반)
+            indicator_reliability = 1.0
+            if indicator_cols:
+                nan_ratio = df[indicator_cols].isna().sum().sum() / (len(df) * len(indicator_cols))
+                indicator_reliability = 1.0 - min(nan_ratio, 1.0)
+            
+            risk_data = {
+                'indicators': indicators,
+                'indicator_reliability': indicator_reliability
+            }
+            
+        elif stage == 'pattern_recognition':
+            # 패턴 인식 단계 체크
+            pattern_cols = [col for col in df.columns if col.startswith('PATTERN_')]
+            patterns = {}
+            for col in pattern_cols:
+                if col in df.columns and len(df) > 0:
+                    val = df[col].iloc[-1]
+                    if pd.notna(val) and val != 0:
+                        patterns[col] = float(val)
+            
+            # 패턴 신뢰도 계산
+            pattern_confidence = 0.0
+            if patterns:
+                # 활성 패턴 수 기반 신뢰도
+                active_patterns = sum(1 for v in patterns.values() if v != 0)
+                pattern_confidence = min(active_patterns / 5.0, 1.0)  # 최대 5개 패턴 기준
+            
+            risk_data = {
+                'patterns': patterns,
+                'pattern_confidence': pattern_confidence
+            }
+            
+        elif stage == 'signal_generation':
+            # 신호 생성 단계 체크
+            if additional_data and isinstance(additional_data, dict):
+                signals = additional_data
+            else:
+                # DataFrame에서 신호 정보 추출
+                signals = {}
+                if 'BUY_RECOMMENDATION' in df.columns and len(df) > 0:
+                    signals['primary_signal'] = 'BUY' if df['BUY_RECOMMENDATION'].iloc[-1] > 0 else 'HOLD'
+                elif 'SELL_RECOMMENDATION' in df.columns and len(df) > 0:
+                    signals['primary_signal'] = 'SELL' if df['SELL_RECOMMENDATION'].iloc[-1] > 0 else 'HOLD'
+                else:
+                    signals['primary_signal'] = 'HOLD'
+                
+                if 'SIGNAL_CONFIDENCE' in df.columns and len(df) > 0:
+                    signals['confidence'] = float(df['SIGNAL_CONFIDENCE'].iloc[-1])
+                else:
+                    signals['confidence'] = 50.0
+                
+                if 'COMBINED_SIGNAL' in df.columns and len(df) > 0:
+                    signals['signal_strength'] = abs(float(df['COMBINED_SIGNAL'].iloc[-1]))
+                else:
+                    signals['signal_strength'] = 0.0
+            
+            # 시장 상태 추정 (변동성 기반)
+            market_condition = 'normal'
+            if 'ATR_percent_14' in df.columns and len(df) > 0:
+                atr_pct = df['ATR_percent_14'].iloc[-1]
+                if pd.notna(atr_pct):
+                    if atr_pct > 5.0:
+                        market_condition = 'extreme'
+                    elif atr_pct > 3.0:
+                        market_condition = 'volatile'
+            
+            risk_data = {
+                'primary_signal': signals.get('primary_signal', 'HOLD'),
+                'signal_strength': signals.get('signal_strength', 0.0),
+                'confidence': signals.get('confidence', 0),
+                'market_condition': market_condition
+            }
+            
+            # Futures 특화 정보 추가
+            if TRADING_TYPE == 'futures':
+                risk_data['leverage'] = 1.0  # 실제로는 설정에서 가져와야 함
+                risk_data['margin_ratio'] = 0.0  # 실제로는 계산 필요
+        
+        return risk_data
+    
+    def _handle_risk_check_result(self, stage: str, result: RiskCheckResult) -> bool:
+        """리스크 체크 결과 처리 및 다음 단계 진행 여부 결정
+        
+        Args:
+            stage: 단계명
+            result: 리스크 체크 결과
+            
+        Returns:
+            다음 단계 진행 가능 여부
+        """
+        # 결과 저장 (모니터링용)
+        if stage in self.risk_check_results:
+            self.risk_check_results[stage].append(result)
+            # 최근 100개만 유지
+            if len(self.risk_check_results[stage]) > 100:
+                self.risk_check_results[stage] = self.risk_check_results[stage][-100:]
+        
+        # 로깅
+        if not result.passed:
+            if result.risk_level == RiskLevel.CRITICAL:
+                self.logger.error(f"[{stage}] 리스크 체크 실패 (CRITICAL): {result.message}")
+            elif result.risk_level == RiskLevel.HIGH:
+                self.logger.warning(f"[{stage}] 리스크 체크 실패 (HIGH): {result.message}")
+            else:
+                self.logger.warning(f"[{stage}] 리스크 체크 실패: {result.message}")
+        else:
+            self.logger.debug(f"[{stage}] 리스크 체크 통과: {result.message}")
+        
+        # 진행 가능 여부 결정
+        # CRITICAL 리스크는 항상 중단
+        if result.risk_level == RiskLevel.CRITICAL and not result.passed:
+            return False
+        
+        # HIGH 리스크는 경고 후 계속 (선택적)
+        # 여기서는 HIGH 리스크도 계속 진행하도록 설정
+        # 필요시 False로 변경하여 중단 가능
+        
+        return True
 
     def _update_buffer(self, data: Dict):
         """실시간 데이터 버퍼 업데이트
@@ -654,8 +883,22 @@ class UnifiedDataProcessor(DataProcessor):
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 df.set_index('timestamp', inplace=True)
 
-            # 배치 처리 로직 재사용
+            # 데이터 수집 단계 리스크 체크 (실시간 데이터)
+            if len(df) > 0:
+                data_collection_risk_data = self._prepare_risk_check_data(df, 'data_collection')
+                # 실시간 데이터의 경우 연결 상태와 지연 시간을 실제로 확인해야 함
+                # 여기서는 기본값 사용
+                data_collection_result = self.risk_checker.check_stage('data_collection', data_collection_risk_data)
+                if not self._handle_risk_check_result('data_collection', data_collection_result):
+                    self.logger.error("실시간 데이터 수집 단계 리스크 체크 실패로 처리 중단")
+                    return None
+
+            # 배치 처리 로직 재사용 (내부에서 리스크 체크 수행)
             processed_df = self._process_batch_data(df)
+            
+            if processed_df.empty:
+                self.logger.warning("처리된 데이터가 비어있습니다.")
+                return None
 
             # 최신 데이터만 반환
             latest_processed = processed_df.iloc[-1].to_dict()
@@ -665,6 +908,13 @@ class UnifiedDataProcessor(DataProcessor):
 
             # 신호 생성
             signals = self.generate_signals(processed_df)
+            
+            # 신호 생성 단계 리스크 체크 (실시간 처리)
+            if signals:
+                signal_risk_data = self._prepare_risk_check_data(processed_df, 'signal_generation', additional_data=signals)
+                signal_result = self.risk_checker.check_stage('signal_generation', signal_risk_data)
+                if not self._handle_risk_check_result('signal_generation', signal_result):
+                    self.logger.warning("실시간 신호 생성 단계 리스크 체크 실패 (경고 후 계속)")
             
             # 신호 로깅
             if signals:
@@ -721,6 +971,55 @@ class UnifiedDataProcessor(DataProcessor):
         self.processed_buffer.clear()
         self.last_processed_time = None
         self.logger.info("버퍼가 초기화되었습니다")
+    
+    def get_risk_check_statistics(self) -> Dict:
+        """리스크 체크 통계 조회
+        
+        Returns:
+            리스크 체크 통계 딕셔너리
+        """
+        stats = {}
+        for stage, results in self.risk_check_results.items():
+            if results:
+                total = len(results)
+                passed = sum(1 for r in results if r.passed)
+                failed = total - passed
+                
+                # 리스크 레벨별 통계
+                critical = sum(1 for r in results if r.risk_level == RiskLevel.CRITICAL and not r.passed)
+                high = sum(1 for r in results if r.risk_level == RiskLevel.HIGH and not r.passed)
+                medium = sum(1 for r in results if r.risk_level == RiskLevel.MEDIUM and not r.passed)
+                low = sum(1 for r in results if r.risk_level == RiskLevel.LOW)
+                
+                stats[stage] = {
+                    'total_checks': total,
+                    'passed': passed,
+                    'failed': failed,
+                    'pass_rate': passed / total if total > 0 else 0.0,
+                    'risk_levels': {
+                        'critical': critical,
+                        'high': high,
+                        'medium': medium,
+                        'low': low
+                    },
+                    'latest_result': str(results[-1]) if results else None
+                }
+            else:
+                stats[stage] = {
+                    'total_checks': 0,
+                    'passed': 0,
+                    'failed': 0,
+                    'pass_rate': 0.0,
+                    'risk_levels': {
+                        'critical': 0,
+                        'high': 0,
+                        'medium': 0,
+                        'low': 0
+                    },
+                    'latest_result': None
+                }
+        
+        return stats
 
 
 # 백테스팅과 실시간 처리를 연결하는 어댑터

@@ -10,6 +10,13 @@ from src.config.settings import TEST_MODE
 from binance.exceptions import BinanceAPIException
 from binance.enums import *
 
+# 리스크 관리 모듈 import
+from src.risk_management import (
+    create_stop_loss_manager,
+    create_position_sizer,
+    ExposureManager
+)
+
 import time
 import uuid
 from enum import Enum
@@ -103,10 +110,15 @@ class SpotOrder:
 class SpotOrderManager:
     """바이낸스 스팟 거래 주문 관리자"""
     
-    def __init__(self, symbol: str):
+    def __init__(
+        self,
+        symbol: str,
+        exposure_manager: Optional[ExposureManager] = None
+    ):
         """
         Args:
             symbol: 거래 심볼 (예: "BTCUSDT")
+            exposure_manager: ExposureManager 인스턴스 (선택적)
         """
         self.logger = get_logger(__name__)
         self.api = BinanceAPI()
@@ -121,10 +133,18 @@ class SpotOrderManager:
         self.active_orders: Dict[str, SpotOrder] = {}
         self.order_history: List[SpotOrder] = []
         
-        # 위험 관리 설정
-        self.max_position_size_pct = 0.1  # 총 자산의 10%
-        self.stop_loss_percentage = 0.02  # 2% 손절
-        self.take_profit_percentage = 0.05  # 5% 익절
+        # 리스크 관리 모듈 초기화
+        self.stop_loss_manager = create_stop_loss_manager(
+            trading_type='spot',
+            symbol=self.symbol
+        )
+        self.position_sizer = create_position_sizer(
+            trading_type='spot',
+            symbol=self.symbol
+        )
+        
+        # ExposureManager 설정 (전달받거나 None)
+        self.exposure_manager = exposure_manager
         
         # 테스트넷/메인넷 모드 설정
         self.use_testnet = TEST_MODE
@@ -137,7 +157,7 @@ class SpotOrderManager:
         self._account_info_cache = None
         self._account_info_cache_time = None
         
-        self.logger.info(f"SpotOrderManager 초기화: {symbol}")
+        self.logger.info(f"SpotOrderManager 초기화: {symbol} (리스크 관리 모듈 통합)")
     
     def get_account_balance(self, asset: str = None) -> Dict[str, float]:
         """
@@ -298,7 +318,7 @@ class SpotOrderManager:
                               quote_amount: float,
                               current_price: Optional[float] = None) -> Optional[SpotOrder]:
         """
-        시장가 매수 주문
+        시장가 매수 주문 (ExposureManager 연동)
         
         Args:
             quote_amount: 사용할 USDT 금액
@@ -336,16 +356,43 @@ class SpotOrderManager:
             if quantity == 0:
                 return None
             
+            # 현재 가격 조회 (없는 경우)
+            if current_price is None:
+                current_price = self.get_current_price()
+            
+            # ExposureManager: 주문 전 노출 체크 및 추가
+            if self.exposure_manager:
+                success = self.exposure_manager.add_position(
+                    symbol=self.symbol,
+                    trading_type='spot',
+                    position_size=quantity,
+                    entry_price=current_price,
+                    current_price=current_price,
+                    leverage=1.0
+                )
+                if not success:
+                    self.logger.warning("ExposureManager: 노출 제한으로 인해 매수 주문 불가")
+                    return None
+            
             # 실제 주문 실행 (테스트넷 또는 메인넷)
             network_type = "테스트넷" if self.use_testnet else "메인넷"
             self.logger.info(f"[바이낸스 {network_type}] 매수 주문 실행: {quote_amount} USDT")
             
-            order_response = self.api.client.create_order(
-                symbol=self.symbol,
-                side=SIDE_BUY,
-                type=ORDER_TYPE_MARKET,
-                quoteOrderQty=quote_amount  # USDT 금액으로 주문
-            )
+            try:
+                order_response = self.api.client.create_order(
+                    symbol=self.symbol,
+                    side=SIDE_BUY,
+                    type=ORDER_TYPE_MARKET,
+                    quoteOrderQty=quote_amount  # USDT 금액으로 주문
+                )
+            except Exception as order_error:
+                # 주문 실패 시 ExposureManager 롤백
+                if self.exposure_manager:
+                    self.exposure_manager.remove_position(
+                        symbol=self.symbol,
+                        trading_type='spot'
+                    )
+                raise order_error
             
             # 주문 객체 생성
             order = SpotOrder(
@@ -456,7 +503,7 @@ class SpotOrderManager:
             return None
     
     def _update_position_after_buy(self, order: SpotOrder):
-        """매수 후 포지션 업데이트"""
+        """매수 후 포지션 업데이트 (새 리스크 관리 모듈 사용)"""
         if not self.current_position:
             # 새 포지션 생성
             self.current_position = SpotPosition(
@@ -475,13 +522,21 @@ class SpotOrderManager:
             self.current_position.avg_price = total_cost / total_quantity
             self.current_position.quantity = total_quantity
         
-        # 손절/익절 가격 설정
+        # 손절/익절 가격 설정 (새 모듈 사용)
+        entry_price = self.current_position.avg_price
         current_price = self.get_current_price()
-        self.current_position.stop_loss_price = current_price * (1 - self.stop_loss_percentage)
-        self.current_position.take_profit_price = current_price * (1 + self.take_profit_percentage)
+        self.current_position.stop_loss_price = self.stop_loss_manager.calculate_stop_loss(
+            entry_price=entry_price,
+            side='LONG',
+            current_price=current_price
+        )
+        self.current_position.take_profit_price = self.stop_loss_manager.calculate_take_profit(
+            entry_price=entry_price,
+            side='LONG'
+        )
     
     def _update_position_after_sell(self, order: SpotOrder):
-        """매도 후 포지션 업데이트"""
+        """매도 후 포지션 업데이트 (ExposureManager 연동)"""
         if not self.current_position:
             self.logger.warning("매도할 포지션이 없습니다.")
             return
@@ -496,35 +551,80 @@ class SpotOrderManager:
                 f"포지션 청산 완료. 실현 손익: {realized_pnl:.2f} {self.quote_asset} "
                 f"({self.current_position.get_unrealized_pnl_pct(order.avg_price):.2f}%)"
             )
+            
+            # ExposureManager: 포지션 제거
+            if self.exposure_manager:
+                self.exposure_manager.remove_position(
+                    symbol=self.symbol,
+                    trading_type='spot'
+                )
+            
             self.current_position = None
     
     def check_risk_management(self, current_price: Optional[float] = None):
-        """위험 관리 상태 확인 (손절/익절)"""
+        """위험 관리 상태 확인 (새 리스크 관리 모듈 사용)"""
         if not self.current_position:
             return
         
         if current_price is None:
             current_price = self.get_current_price()
         
-        # 손절 확인
-        if (self.current_position.stop_loss_price and 
-            current_price <= self.current_position.stop_loss_price):
-            self.logger.warning(f"손절가 도달: {current_price} <= {self.current_position.stop_loss_price}")
-            self.place_market_sell_order(quantity=self.current_position.quantity)
+        # 현재 가격이 유효하지 않으면 리턴
+        if current_price is None or current_price <= 0:
+            return
         
-        # 익절 확인
-        elif (self.current_position.take_profit_price and 
-              current_price >= self.current_position.take_profit_price):
-            self.logger.info(f"익절가 도달: {current_price} >= {self.current_position.take_profit_price}")
+        # 진입 가격이 없으면 리스크 관리 불가
+        if self.current_position.avg_price <= 0:
+            return
+        
+        # 손절/익절 가격이 설정되지 않은 경우 계산 (새 모듈 사용)
+        if self.current_position.stop_loss_price is None or self.current_position.take_profit_price is None:
+            self.current_position.stop_loss_price = self.stop_loss_manager.calculate_stop_loss(
+                entry_price=self.current_position.avg_price,
+                side='LONG',
+                current_price=current_price
+            )
+            self.current_position.take_profit_price = self.stop_loss_manager.calculate_take_profit(
+                entry_price=self.current_position.avg_price,
+                side='LONG'
+            )
+        
+        # 손절 확인 (새 모듈 사용)
+        if self.stop_loss_manager.check_stop_loss(
+            current_price=current_price,
+            side='LONG',
+            entry_price=self.current_position.avg_price
+        ):
+            self.logger.warning(f"손절 조건 도달: {current_price} (손절가: {self.current_position.stop_loss_price})")
             self.place_market_sell_order(quantity=self.current_position.quantity)
+            return
+        
+        # 익절 확인 (새 모듈 사용)
+        if self.stop_loss_manager.check_take_profit(
+            current_price=current_price,
+            side='LONG',
+            entry_price=self.current_position.avg_price
+        ):
+            self.logger.info(f"익절 조건 도달: {current_price} (익절가: {self.current_position.take_profit_price})")
+            self.place_market_sell_order(quantity=self.current_position.quantity)
+            return
     
     def get_current_position(self) -> Optional[SpotPosition]:
-        """현재 포지션 상태 조회"""
+        """현재 포지션 상태 조회 (새 리스크 관리 모듈 사용)"""
         if self.current_position:
             # 최신 가격으로 업데이트
             current_price = self.get_current_price()
-            self.current_position.stop_loss_price = current_price * (1 - self.stop_loss_percentage)
-            self.current_position.take_profit_price = current_price * (1 + self.take_profit_percentage)
+            entry_price = self.current_position.avg_price
+            if entry_price > 0:
+                self.current_position.stop_loss_price = self.stop_loss_manager.calculate_stop_loss(
+                    entry_price=entry_price,
+                    side='LONG',
+                    current_price=current_price
+                )
+                self.current_position.take_profit_price = self.stop_loss_manager.calculate_take_profit(
+                    entry_price=entry_price,
+                    side='LONG'
+                )
         
         return self.current_position
     

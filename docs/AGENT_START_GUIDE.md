@@ -84,7 +84,16 @@ docs/AGENT_ROLES.md와 docs/AGENT_TASKS.md를 참고하여 Agent 3 (Risk Check I
 
 **시작 지시문:**
 ```
-ㄴ
+docs/AGENT_ROLES.md와 docs/AGENT_TASKS.md를 참고하여 Agent 4 (Dashboard Agent) 작업을 수행하세요.
+
+작업 목표:
+- 웹 기반 실시간 대시보드 구현 (Flask/FastAPI + React)
+- 실시간 차트 및 포지션 모니터링
+- Spot/Futures 모드 표시
+
+주의사항:
+- 기존 콘솔 대시보드와 병행 운영 가능하도록
+- 보안 고려 (API 키 등 민감 정보 노출 방지)
 ```
 
 ---

@@ -38,19 +38,41 @@
 - 피드백 루프 구현 위치 결정
 - 성과 추적 모듈과 리스크 관리 모듈 연동
 
-### 2. 리스크 관리 모듈 통합 (Must-have)
+### 2. 리스크 관리 모듈 통합 (Must-have) ✅
 
 **목표:**
 - 기존 OrderManager의 리스크 관리 로직을 새 모듈로 교체
 - ExposureManager와 OrderManager 연동
 
 **진행 상황:**
-- 아직 시작 안 함
+- ✅ 완료 (2025-11-30)
+- FuturesOrderManager가 새 리스크 관리 모듈 사용
+- SpotOrderManager가 새 리스크 관리 모듈 사용
+- ExposureManager와 OrderManager 연동 완료
+- 레거시 리스크 관리 코드 제거 완료
 
-**다음 단계:**
-- `src/execution/order_manager.py` 분석
-- `src/execution/spot_order_manager.py` 분석
-- 리스크 관리 로직 교체 계획 수립
+**완료된 작업:**
+- `src/execution/order_manager.py`: FuturesOrderManager 리스크 관리 모듈 통합 완료
+- `src/execution/spot_order_manager.py`: SpotOrderManager 리스크 관리 모듈 통합 완료
+- `src/integration/realtime_backtest_integration.py`: ExposureManager 생성 및 OrderManager에 전달
+- 레거시 리스크 관리 코드 제거 (stop_loss_percentage, take_profit_percentage 등)
+
+### 3. 리스크 체크 통합 (Must-have) ✅
+
+**목표:**
+- UnifiedDataProcessor에 IntegratedRiskChecker 통합
+- 각 데이터 처리 단계에서 리스크 체크 수행
+- 리스크 체크 실패 시 처리 중단 로직 구현
+
+**진행 상황:**
+- ✅ 완료 (2025-11-30)
+
+**완료 사항:**
+- `UnifiedDataProcessor`에 `IntegratedRiskChecker` 통합 완료
+- 각 처리 단계(데이터 수집, 전처리, 지표 계산, 패턴 인식, 신호 생성)에서 리스크 체크 수행
+- CRITICAL 리스크 발생 시 처리 중단 로직 구현
+- 리스크 체크 결과 모니터링 및 로깅 구현
+- 배치 처리 및 실시간 스트리밍 처리 모두에 리스크 체크 통합
 
 ## 다음 작업자를 위한 정보
 
@@ -99,7 +121,51 @@
 
 ## 알려진 이슈
 
-### 현재 없음
+### Agent 3: Data Collection 리스크 체크 데이터 수집 로직 미구현
+
+**발견 일자**: 2025-11-30  
+**우선순위**: Should-have
+
+**문제점**:
+- `_prepare_risk_check_data()` 메서드의 data_collection 단계에서:
+  - `connection_status`: 항상 'connected'로 하드코딩 (실제 연결 상태 미확인)
+  - `data_delay_ms`: 항상 0으로 하드코딩 (실제 지연 시간 미계산)
+  - `orderbook`: 빈 딕셔너리 (오더북 데이터 미수집)
+
+**영향**:
+- 데이터 수집 단계의 리스크 체크가 제한적으로 작동
+- 연결 끊김, 데이터 지연, 유동성 리스크를 정확히 감지하지 못함
+
+**해결 방안**:
+1. `data_delay_ms`: DataFrame의 마지막 타임스탬프와 현재 시간 비교하여 계산
+2. `connection_status`: 웹소켓 클라이언트의 `connected` 속성 확인
+3. `orderbook`: 웹소켓 클라이언트에 오더북 구독 기능 추가 (선택적)
+
+**상태**: 향후 개선 사항으로 기록됨 (Phase 2 Must-have 완료 후 처리 예정)
+
+### Agent 1: 주문 성공 여부 확인 로직 미구현
+
+**발견 일자**: 2025-11-30  
+**우선순위**: Should-have
+
+**문제점**:
+- `open_position()` 메서드에서 `ExposureManager.add_position()`이 주문 전에 호출됨
+- 주문 성공 여부를 명확히 확인하지 않음
+- 주문 응답 상태를 확인하지 않음
+- 원래 계획(AGENT_TASKS.md)에는 "주문 성공 후 노출 업데이트"가 포함되어 있었으나 완전히 구현되지 않음
+
+**영향**:
+- 주문이 실제로 성공하지 않았는데 노출이 추가될 수 있음 (롤백 로직은 존재)
+- 부분 체결이나 다른 주문 상태를 처리하지 않음
+- 노출 관리의 정확도가 떨어질 수 있음
+
+**해결 방안**:
+1. 주문 응답 확인 후 노출 업데이트 로직 추가
+2. 주문 성공 여부(`order.status == 'FILLED'`) 확인
+3. 하이브리드 방식 고려 (주문 전 `can_open_new_position()` 체크 + 주문 성공 후 `add_position()` 호출)
+4. 부분 체결 처리 로직 추가 (선택적)
+
+**상태**: 향후 개선 사항으로 기록됨 (Phase 2 Must-have 완료 후 처리 예정)
 
 ## 향후 계획
 
@@ -127,13 +193,19 @@
 
 ## 작업 히스토리
 
-### [2024-12-19] Phase 1 완료
+### [2025-11-30] Agent 3 작업 완료
+- UnifiedDataProcessor에 IntegratedRiskChecker 통합 완료
+- 각 데이터 처리 단계에서 리스크 체크 수행 구현
+- 리스크 체크 실패 시 처리 중단 로직 구현
+- 배치 및 실시간 처리 모두에 리스크 체크 통합
+
+### [2025-11-30] Phase 1 완료
 - 리스크 관리 모듈 구현 완료
 - 단계별 리스크 체크 시스템 구현 완료
 - 데이터 전처리 모듈 명시화 완료
 - Phase 2 시작
 
-### [2024-12-19] 문서화 프레임워크 구축
+### [2025-11-30] 문서화 프레임워크 구축
 - DECISIONS.md 생성
 - ARCHITECTURE.md 생성
 - PRIORITIES.md 생성

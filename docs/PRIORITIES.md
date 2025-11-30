@@ -53,19 +53,32 @@
   - 리스크 관리 → 데이터 수집 피드백
   - 실시간 성과 기반 자동 조정
   - Spot/Futures별 성과 추적
-- ⏳ 리스크 관리 모듈과 OrderManager 통합
+- ✅ 리스크 관리 모듈과 OrderManager 통합
   - 기존 OrderManager의 리스크 관리 로직을 새 모듈로 교체
   - ExposureManager와 OrderManager 연동
+- ✅ 리스크 체크 통합
+  - UnifiedDataProcessor에 IntegratedRiskChecker 통합
+  - 각 데이터 처리 단계에서 리스크 체크 수행
+  - 리스크 체크 실패 시 처리 중단 로직 구현
 
 #### Should-have
 - ⏳ 실시간 대시보드 개선
   - 웹 기반 대시보드 (Flask/FastAPI + React)
   - 실시간 차트
   - Spot/Futures 모드 표시
-- ⏳ 레거시 코드 제거
+- ✅ 레거시 코드 제거
   - `order_manager.py`의 레거시 리스크 관리 로직 제거
   - `spot_order_manager.py`의 레거시 리스크 관리 로직 제거
-  - `unified_processor.py`의 레거시 `_remove_outliers()` 제거
+  - `unified_processor.py`의 레거시 `_remove_outliers()` 제거 (아직 미완료)
+- ⏳ Data Collection 리스크 체크 데이터 수집 로직 구현
+  - `data_delay_ms` 실제 계산 로직 추가 (높은 우선순위)
+  - `connection_status` 실제 확인 로직 추가 (높은 우선순위)
+  - `orderbook` 데이터 수집 기능 추가 (낮은 우선순위, 선택적)
+- ⏳ 주문 성공 여부 확인 로직 추가
+  - 주문 응답 확인 후 노출 업데이트 (높은 우선순위)
+  - 주문 성공 여부(`order.status == 'FILLED'`) 확인 (높은 우선순위)
+  - 하이브리드 방식 구현 (주문 전 체크 + 주문 성공 후 추가) (중간 우선순위)
+  - 부분 체결 처리 로직 추가 (낮은 우선순위, 선택적)
 
 #### Nice-to-have
 - ⏳ 대시보드 고급 기능
