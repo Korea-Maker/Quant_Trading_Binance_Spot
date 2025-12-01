@@ -172,6 +172,73 @@ class SignalBasedStrategy(BaseStrategy):
         
         # 최대 30%로 제한
         return min(position_size, 0.3)
+    
+    def adjust_parameters(self, performance_feedback: Dict[str, Any]) -> None:
+        """
+        성과 피드백에 따라 전략 파라미터 조정
+        
+        Args:
+            performance_feedback: 성과 피드백 딕셔너리
+                - 'win_rate': 승률 (0-100)
+                - 'recent_performance': 최근 성과 정보
+                - 'risk_level': 리스크 레벨 ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
+                - 'trading_type': 거래 타입 ('spot' 또는 'futures')
+        """
+        try:
+            win_rate = performance_feedback.get('win_rate', 50.0)
+            risk_level = performance_feedback.get('risk_level', 'MEDIUM')
+            trading_type = performance_feedback.get('trading_type', 'spot')
+            
+            # 승률이 낮으면 신뢰도 요구사항 증가 (더 보수적으로)
+            if win_rate < 50.0:
+                # 승률이 낮을수록 더 보수적으로
+                adjustment_factor = (50.0 - win_rate) / 50.0  # 0% 승률일 때 1.0, 50%일 때 0.0
+                min_confidence_increase = adjustment_factor * 15.0  # 최대 15% 증가
+                self.min_confidence = min(self.min_confidence + min_confidence_increase, 90.0)
+                self.min_signal_strength = min(self.min_signal_strength + adjustment_factor * 0.5, 3.0)
+                
+                self.logger.info(
+                    f"성과 저조로 인한 파라미터 조정: "
+                    f"min_confidence={self.min_confidence:.1f}%, "
+                    f"min_signal_strength={self.min_signal_strength:.2f}"
+                )
+            
+            # 승률이 높으면 신뢰도 요구사항 완화 (선택적, 더 공격적으로)
+            elif win_rate > 70.0:
+                # 승률이 높을수록 더 공격적으로 (하지만 제한적으로)
+                adjustment_factor = (win_rate - 70.0) / 30.0  # 70%일 때 0.0, 100%일 때 1.0
+                min_confidence_decrease = adjustment_factor * 5.0  # 최대 5% 감소
+                self.min_confidence = max(self.min_confidence - min_confidence_decrease, 50.0)
+                self.min_signal_strength = max(self.min_signal_strength - adjustment_factor * 0.2, 0.5)
+                
+                self.logger.info(
+                    f"성과 우수로 인한 파라미터 조정: "
+                    f"min_confidence={self.min_confidence:.1f}%, "
+                    f"min_signal_strength={self.min_signal_strength:.2f}"
+                )
+            
+            # 리스크 레벨에 따른 조정
+            if risk_level == 'HIGH' or risk_level == 'CRITICAL':
+                # 리스크가 높으면 더 보수적으로
+                self.min_confidence = min(self.min_confidence + 5.0, 90.0)
+                self.min_signal_strength = min(self.min_signal_strength + 0.3, 3.0)
+                self.logger.info(
+                    f"높은 리스크로 인한 파라미터 조정: "
+                    f"min_confidence={self.min_confidence:.1f}%, "
+                    f"min_signal_strength={self.min_signal_strength:.2f}"
+                )
+            elif risk_level == 'LOW':
+                # 리스크가 낮으면 약간 더 공격적으로
+                self.min_confidence = max(self.min_confidence - 2.0, 50.0)
+                self.min_signal_strength = max(self.min_signal_strength - 0.1, 0.5)
+                self.logger.info(
+                    f"낮은 리스크로 인한 파라미터 조정: "
+                    f"min_confidence={self.min_confidence:.1f}%, "
+                    f"min_signal_strength={self.min_signal_strength:.2f}"
+                )
+                
+        except Exception as e:
+            self.logger.error(f"파라미터 조정 중 오류: {e}", exc_info=True)
 
 
 class ConservativeSignalStrategy(SignalBasedStrategy):

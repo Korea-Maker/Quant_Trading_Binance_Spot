@@ -4,7 +4,7 @@ import asyncio
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Any
 from collections import deque
 import json
 import threading
@@ -245,7 +245,8 @@ class RealtimeBacktestIntegration:
                 asyncio.create_task(self._realtime_trading_loop(self._strategy_func_wrapper)),
                 asyncio.create_task(self._periodic_backtest_loop(self._strategy_func_wrapper)),
                 asyncio.create_task(self._risk_management_loop()),
-                asyncio.create_task(self._dashboard_update_loop())
+                asyncio.create_task(self._dashboard_update_loop()),
+                asyncio.create_task(self._adaptive_adjustment_loop())  # 피드백 루프 추가
             ]
 
             await asyncio.gather(*tasks)
@@ -676,7 +677,8 @@ class RealtimeBacktestIntegration:
                 'signal_strength': signal.get('signal_strength', 0),
                 'confidence': signal.get('confidence', 0),
                 'patterns': signal.get('patterns', {}),
-                'position_size_pct': position_size_pct
+                'position_size_pct': position_size_pct,
+                'trading_type': TRADING_TYPE  # 거래 타입 추가
             }
             
             # 실제 주문 실행 (거래 타입에 따라 분기)
@@ -827,6 +829,29 @@ class RealtimeBacktestIntegration:
             if self.dashboard:
                 self.dashboard.update_trade(trade_record)
             
+            # 성능 모니터에 거래 기록 (매도 시에만 수익 기록)
+            if self.performance_monitor and trade_record.get('executed', False):
+                if action == 'sell' and 'profit' in trade_record:
+                    # 매도 시 수익 기록
+                    self.performance_monitor.record_trade({
+                        'timestamp': trade_record['timestamp'],
+                        'action': action,
+                        'price': trade_record.get('price', current_price),
+                        'quantity': trade_record.get('quantity', 0),
+                        'profit': trade_record.get('profit', 0),
+                        'profit_amount': trade_record.get('profit_amount', 0),
+                        'trading_type': trade_record.get('trading_type', TRADING_TYPE)
+                    })
+                elif action == 'buy':
+                    # 매수 시 거래 기록 (수익 없음)
+                    self.performance_monitor.record_trade({
+                        'timestamp': trade_record['timestamp'],
+                        'action': action,
+                        'price': trade_record.get('price', current_price),
+                        'quantity': trade_record.get('quantity', 0),
+                        'trading_type': trade_record.get('trading_type', TRADING_TYPE)
+                    })
+            
             # 성능 통계 즉시 업데이트 (거래 후)
             if self.performance_monitor:
                 # 실제 계정 잔액으로 업데이트
@@ -943,6 +968,246 @@ class RealtimeBacktestIntegration:
                 }
 
         return thresholds
+    
+    async def _performance_based_risk_reassessment(self) -> Dict[str, Any]:
+        """
+        성과 기반 리스크 재평가
+        
+        Returns:
+            리스크 평가 결과 딕셔너리
+        """
+        try:
+            if not self.performance_monitor:
+                return {'risk_level': 'MEDIUM', 'adjustment_needed': False}
+            
+            # 최근 성과 분석 (7일)
+            recent_perf = self.performance_monitor.get_recent_performance(days=7)
+            win_rate = recent_perf.get('win_rate', 50.0)
+            total_profit = recent_perf.get('profit', 0.0)
+            
+            # 전체 통계도 확인
+            stats = self.performance_monitor.get_statistics()
+            total_win_rate = stats.get('win_rate', 50.0)
+            max_drawdown_pct = stats.get('max_drawdown_pct', 0.0)
+            
+            # 리스크 레벨 결정
+            risk_level = 'MEDIUM'
+            adjustment_needed = False
+            
+            # 성과가 나쁘면 리스크 관리 강화
+            if win_rate < 40.0 or total_profit < 0:
+                risk_level = 'HIGH'
+                adjustment_needed = True
+                self.logger.warning(
+                    f"성과 저조로 인한 리스크 레벨 상향: "
+                    f"승률={win_rate:.1f}%, 수익={total_profit:.2f}"
+                )
+            elif win_rate < 50.0:
+                risk_level = 'MEDIUM'
+                adjustment_needed = True
+            elif max_drawdown_pct > 20.0:
+                risk_level = 'HIGH'
+                adjustment_needed = True
+                self.logger.warning(
+                    f"최대 낙폭 초과로 인한 리스크 레벨 상향: "
+                    f"최대 낙폭={max_drawdown_pct:.2f}%"
+                )
+            elif win_rate > 70.0 and total_profit > 0 and max_drawdown_pct < 10.0:
+                risk_level = 'LOW'
+                adjustment_needed = True
+                self.logger.info(
+                    f"성과 우수로 인한 리스크 레벨 하향: "
+                    f"승률={win_rate:.1f}%, 수익={total_profit:.2f}"
+                )
+            
+            return {
+                'risk_level': risk_level,
+                'adjustment_needed': adjustment_needed,
+                'win_rate': win_rate,
+                'total_win_rate': total_win_rate,
+                'total_profit': total_profit,
+                'max_drawdown_pct': max_drawdown_pct,
+                'trading_type': TRADING_TYPE
+            }
+            
+        except Exception as e:
+            self.logger.error(f"성과 기반 리스크 재평가 중 오류: {e}", exc_info=True)
+            return {'risk_level': 'MEDIUM', 'adjustment_needed': False}
+    
+    def _adjust_data_collection_params(self, risk_assessment: Dict[str, Any]) -> None:
+        """
+        리스크 평가 결과에 따라 데이터 수집 파라미터 조정
+        
+        Args:
+            risk_assessment: 리스크 평가 결과
+        """
+        try:
+            risk_level = risk_assessment.get('risk_level', 'MEDIUM')
+            adjustment_needed = risk_assessment.get('adjustment_needed', False)
+            
+            if not adjustment_needed:
+                return
+            
+            # 리스크가 높으면 더 자주 데이터 수집 (더 빠른 반응)
+            if risk_level == 'HIGH' or risk_level == 'CRITICAL':
+                # min_data_points 감소 (더 빠른 신호 생성)
+                if hasattr(self.unified_processor, 'min_data_points'):
+                    # 최소값은 30으로 제한 (너무 낮으면 신호 품질 저하)
+                    new_min_points = max(self.unified_processor.min_data_points - 10, 30)
+                    if new_min_points != self.unified_processor.min_data_points:
+                        self.unified_processor.min_data_points = new_min_points
+                        self.logger.info(
+                            f"높은 리스크로 인한 데이터 수집 파라미터 조정: "
+                            f"min_data_points={new_min_points}"
+                        )
+            
+            # 리스크가 낮으면 데이터 수집 빈도 감소 (성능 최적화)
+            elif risk_level == 'LOW':
+                # min_data_points 증가 (더 안정적인 신호)
+                if hasattr(self.unified_processor, 'min_data_points'):
+                    # 최대값은 200으로 제한
+                    new_min_points = min(self.unified_processor.min_data_points + 10, 200)
+                    if new_min_points != self.unified_processor.min_data_points:
+                        self.unified_processor.min_data_points = new_min_points
+                        self.logger.info(
+                            f"낮은 리스크로 인한 데이터 수집 파라미터 조정: "
+                            f"min_data_points={new_min_points}"
+                        )
+                        
+        except Exception as e:
+            self.logger.error(f"데이터 수집 파라미터 조정 중 오류: {e}", exc_info=True)
+    
+    async def _adaptive_adjustment_loop(self):
+        """
+        실시간 성과 기반 자동 조정 루프
+        
+        성과 기록 → 리스크 재평가 → 전략 조정 파이프라인을 주기적으로 실행합니다.
+        """
+        self.logger.info("적응형 조정 루프 시작")
+        
+        while self.is_running:
+            try:
+                # 1시간마다 실행
+                await asyncio.sleep(3600)
+                
+                if not self.performance_monitor or not self.strategy:
+                    continue
+                
+                self.logger.info("성과 기반 자동 조정 실행 중...")
+                
+                # 1. 성과 기록 분석
+                recent_perf = self.performance_monitor.get_recent_performance(days=7)
+                stats = self.performance_monitor.get_statistics()
+                
+                # Spot/Futures별 성과 확인
+                spot_stats = stats.get('spot_performance', {})
+                futures_stats = stats.get('futures_performance', {})
+                
+                # 현재 거래 타입에 맞는 성과 사용
+                if TRADING_TYPE == 'futures':
+                    trading_type_perf = futures_stats
+                else:
+                    trading_type_perf = spot_stats
+                
+                win_rate = trading_type_perf.get('win_rate', stats.get('win_rate', 50.0))
+                
+                # 2. 리스크 재평가
+                risk_assessment = await self._performance_based_risk_reassessment()
+                
+                # 3. 리스크 관리 → 데이터 수집 피드백
+                self._adjust_data_collection_params(risk_assessment)
+                
+                # 4. 전략 파라미터 조정
+                if hasattr(self.strategy, 'adjust_parameters'):
+                    performance_feedback = {
+                        'win_rate': win_rate,
+                        'recent_performance': recent_perf,
+                        'risk_level': risk_assessment.get('risk_level', 'MEDIUM'),
+                        'trading_type': TRADING_TYPE
+                    }
+                    self.strategy.adjust_parameters(performance_feedback)
+                    self.logger.info(
+                        f"전략 파라미터 조정 완료: "
+                        f"승률={win_rate:.1f}%, 리스크 레벨={risk_assessment.get('risk_level', 'MEDIUM')}"
+                    )
+                
+                # 5. 리스크 관리 모듈 파라미터 조정 (OrderManager의 리스크 관리 모듈)
+                if self.order_manager and risk_assessment.get('adjustment_needed', False):
+                    await self._adjust_risk_management_params(risk_assessment)
+                
+            except Exception as e:
+                self.logger.error(f"적응형 조정 루프 오류: {e}", exc_info=True)
+                await asyncio.sleep(3600)
+    
+    async def _adjust_risk_management_params(self, risk_assessment: Dict[str, Any]) -> None:
+        """
+        리스크 관리 모듈 파라미터 조정
+        
+        Args:
+            risk_assessment: 리스크 평가 결과
+        """
+        try:
+            if not self.order_manager:
+                return
+            
+            risk_level = risk_assessment.get('risk_level', 'MEDIUM')
+            
+            # OrderManager의 리스크 관리 모듈에 접근
+            if hasattr(self.order_manager, 'stop_loss_manager'):
+                stop_loss_manager = self.order_manager.stop_loss_manager
+                
+                if risk_level == 'HIGH' or risk_level == 'CRITICAL':
+                    # 리스크가 높으면 손절 비율 감소 (더 빠른 손절)
+                    if hasattr(stop_loss_manager, 'stop_loss_pct'):
+                        # 현재 값의 80%로 감소 (최소 1%로 제한)
+                        new_stop_loss = max(stop_loss_manager.stop_loss_pct * 0.8, 0.01)
+                        if abs(new_stop_loss - stop_loss_manager.stop_loss_pct) > 0.001:
+                            stop_loss_manager.stop_loss_pct = new_stop_loss
+                            self.logger.info(
+                                f"높은 리스크로 인한 손절 비율 조정: "
+                                f"{stop_loss_manager.stop_loss_pct:.2%} -> {new_stop_loss:.2%}"
+                            )
+                
+                elif risk_level == 'LOW':
+                    # 리스크가 낮으면 손절 비율 약간 증가 (더 여유 있게)
+                    if hasattr(stop_loss_manager, 'stop_loss_pct'):
+                        # 현재 값의 110%로 증가 (최대 5%로 제한)
+                        new_stop_loss = min(stop_loss_manager.stop_loss_pct * 1.1, 0.05)
+                        if abs(new_stop_loss - stop_loss_manager.stop_loss_pct) > 0.001:
+                            stop_loss_manager.stop_loss_pct = new_stop_loss
+                            self.logger.info(
+                                f"낮은 리스크로 인한 손절 비율 조정: "
+                                f"{stop_loss_manager.stop_loss_pct:.2%} -> {new_stop_loss:.2%}"
+                            )
+            
+            # PositionSizer 파라미터 조정
+            if hasattr(self.order_manager, 'position_sizer'):
+                position_sizer = self.order_manager.position_sizer
+                
+                if risk_level == 'HIGH' or risk_level == 'CRITICAL':
+                    # 리스크가 높으면 최대 포지션 크기 감소
+                    if hasattr(position_sizer, 'max_position_size_pct'):
+                        new_max_size = max(position_sizer.max_position_size_pct * 0.8, 0.05)
+                        if abs(new_max_size - position_sizer.max_position_size_pct) > 0.001:
+                            position_sizer.max_position_size_pct = new_max_size
+                            self.logger.info(
+                                f"높은 리스크로 인한 최대 포지션 크기 조정: "
+                                f"{position_sizer.max_position_size_pct:.2%} -> {new_max_size:.2%}"
+                            )
+                
+                elif risk_level == 'LOW':
+                    # 리스크가 낮으면 최대 포지션 크기 약간 증가
+                    if hasattr(position_sizer, 'max_position_size_pct'):
+                        new_max_size = min(position_sizer.max_position_size_pct * 1.1, 0.3)
+                        if abs(new_max_size - position_sizer.max_position_size_pct) > 0.001:
+                            position_sizer.max_position_size_pct = new_max_size
+                            self.logger.info(
+                                f"낮은 리스크로 인한 최대 포지션 크기 조정: "
+                                f"{position_sizer.max_position_size_pct:.2%} -> {new_max_size:.2%}"
+                            )
+                            
+        except Exception as e:
+            self.logger.error(f"리스크 관리 파라미터 조정 중 오류: {e}", exc_info=True)
 
     def get_performance_summary(self) -> Dict:
         """현재 성능 요약 반환"""

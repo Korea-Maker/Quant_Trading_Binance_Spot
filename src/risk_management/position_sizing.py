@@ -511,9 +511,10 @@ def create_position_sizer(
         포지션 사이징 관리자 인스턴스
     """
     if trading_type == 'futures':
-        leverage = kwargs.get('leverage', 1.0)
+        leverage = kwargs.pop('leverage', 1.0)  # kwargs에서 제거하여 중복 전달 방지
         return FuturesPositionSizer(symbol=symbol, leverage=leverage, **kwargs)
     else:
+        kwargs.pop('leverage', None)  # Spot에서는 leverage 무시
         return SpotPositionSizer(symbol=symbol, **kwargs)
 
 

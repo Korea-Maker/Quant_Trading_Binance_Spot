@@ -439,9 +439,10 @@ def create_stop_loss_manager(
         손절/익절 관리자 인스턴스
     """
     if trading_type == 'futures':
-        leverage = kwargs.get('leverage', 1.0)
+        leverage = kwargs.pop('leverage', 1.0)  # kwargs에서 제거하여 중복 전달 방지
         return FuturesStopLossManager(symbol=symbol, leverage=leverage, **kwargs)
     else:
+        kwargs.pop('leverage', None)  # Spot에서는 leverage 무시
         return SpotStopLossManager(symbol=symbol, **kwargs)
 
 

@@ -23,7 +23,7 @@
 
 ## 현재 작업 중인 항목
 
-### 1. 피드백 루프 강화 (Must-have)
+### 1. 피드백 루프 강화 (Must-have) ✅
 
 **목표:**
 - 리스크 관리 → 데이터 수집 피드백 구현
@@ -31,12 +31,19 @@
 - Spot/Futures별 성과 추적
 
 **진행 상황:**
-- 아직 시작 안 함
+- ✅ 완료 (2025-12-02)
 
-**다음 단계:**
-- `src/integration/realtime_backtest_integration.py` 분석
-- 피드백 루프 구현 위치 결정
-- 성과 추적 모듈과 리스크 관리 모듈 연동
+**완료된 작업:**
+- `src/monitoring/performance.py`: Spot/Futures별 성과 추적 이미 구현됨 (확인 완료)
+- `src/integration/realtime_backtest_integration.py`: 
+  - 성과 기반 리스크 재평가 로직 구현 (`_performance_based_risk_reassessment()`)
+  - 리스크 관리 → 데이터 수집 피드백 구현 (`_adjust_data_collection_params()`)
+  - 실시간 성과 기반 자동 조정 루프 구현 (`_adaptive_adjustment_loop()`)
+  - 리스크 관리 모듈 파라미터 조정 (`_adjust_risk_management_params()`)
+  - 거래 기록에 trading_type 추가 및 성능 모니터 연동
+- `src/strategy/signals.py`: 
+  - `SignalBasedStrategy`에 `adjust_parameters()` 메서드 추가
+  - 성과 피드백에 따라 전략 파라미터 동적 조정 구현
 
 ### 2. 리스크 관리 모듈 통합 (Must-have) ✅
 
@@ -192,6 +199,13 @@
 - **프로젝트 README**: `README.md`
 
 ## 작업 히스토리
+
+### [2025-11-30] Agent 2 작업 완료
+- 피드백 루프 강화 완료
+- 성과 기반 리스크 재평가 로직 구현
+- 리스크 관리 → 데이터 수집 피드백 구현
+- 실시간 성과 기반 자동 조정 루프 구현
+- 전략 파라미터 동적 조정 기능 추가
 
 ### [2025-11-30] Agent 3 작업 완료
 - UnifiedDataProcessor에 IntegratedRiskChecker 통합 완료

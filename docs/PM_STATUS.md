@@ -18,7 +18,7 @@
 
 #### Must-have
 - ✅ **Agent 1**: 리스크 관리 모듈 통합 (완료 - 2025-11-30)
-- ⏳ **Agent 2**: 피드백 루프 강화 (대기 중)
+- ✅ **Agent 2**: 피드백 루프 강화 (완료 - 2025-12-02)
 - ✅ **Agent 3**: 리스크 체크 통합 (완료 - 2025-11-30)
 
 #### Should-have
@@ -64,28 +64,39 @@ docs/AGENT_ROLES.md와 docs/AGENT_TASKS.md를 참고하여 Agent 1 (Risk Integra
 
 ### Agent 2: Feedback Loop Agent
 
-**상태**: 대기 중  
+**상태**: 완료 ✅  
 **우선순위**: Must-have  
-**작업 파일**:
-- `src/integration/realtime_backtest_integration.py`
-- `src/monitoring/performance.py`
-- `src/strategy/signals.py`
+**완료 날짜**: 2025-12-02  
+**작업 파일**: 
+- `src/integration/realtime_backtest_integration.py` ✅
+- `src/monitoring/performance.py` ✅
+- `src/strategy/signals.py` ✅
 
-**의존성**: Agent 1 완료 권장 (필수는 아님)
+**완료된 작업:**
+- ✅ 성과 추적 모듈 확인 및 확장 (Spot/Futures별 추적 이미 구현됨)
+- ✅ `SignalBasedStrategy`에 `adjust_parameters()` 메서드 추가
+  - 성과 피드백(승률, 리스크 레벨)에 따라 전략 파라미터 동적 조정
+- ✅ 성과 기반 리스크 재평가 로직 구현 (`_performance_based_risk_reassessment()`)
+  - 최근 성과(7일) 분석
+  - 승률, 수익, 최대 낙폭 기반 리스크 레벨 결정
+- ✅ 리스크 관리 → 데이터 수집 피드백 구현 (`_adjust_data_collection_params()`)
+  - 리스크 레벨에 따라 `min_data_points` 조정
+  - HIGH/CRITICAL: 더 빠른 신호 생성 (min_data_points 감소)
+  - LOW: 더 안정적인 신호 (min_data_points 증가)
+- ✅ 실시간 성과 기반 자동 조정 루프 구현 (`_adaptive_adjustment_loop()`)
+  - 1시간마다 자동 실행
+  - 성과 기록 → 리스크 재평가 → 전략 조정 파이프라인 완성
+- ✅ 리스크 관리 모듈 파라미터 조정 (`_adjust_risk_management_params()`)
+  - 손절 비율 동적 조정
+  - 최대 포지션 크기 동적 조정
+- ✅ 거래 기록에 `trading_type` 추가 및 성능 모니터 연동
 
-**시작 지시문**:
-```
-docs/AGENT_ROLES.md와 docs/AGENT_TASKS.md를 참고하여 Agent 2 (Feedback Loop Agent) 작업을 수행하세요.
+**의존성**: Agent 1 완료 권장 (필수는 아님) - 완료됨
 
-작업 목표:
-- 리스크 관리 → 데이터 수집 피드백 구현
-- 실시간 성과 기반 자동 조정
-- Spot/Futures별 성과 추적
-
-주의사항:
-- 기존 백테스팅 피드백 로직과 충돌하지 않도록
-- Spot과 Futures 성과를 구분하여 추적
-```
+**주요 기능:**
+- 성과 저조 시: 신뢰도 요구사항 증가, 손절 비율 감소, 포지션 크기 감소
+- 성과 우수 시: 신뢰도 요구사항 완화, 손절 비율 증가, 포지션 크기 증가
+- 리스크 레벨에 따른 자동 조정: HIGH/CRITICAL → 보수적, LOW → 공격적
 
 ---
 
@@ -153,9 +164,9 @@ docs/AGENT_ROLES.md와 docs/AGENT_TASKS.md를 참고하여 Agent 4 (Dashboard Ag
 
 ### 순차 작업 권장
 
-3. **Agent 2** (Feedback Loop) - Agent 1 완료 후 권장
+3. ✅ **Agent 2** (Feedback Loop) - 완료
+   - 완료일: 2025-12-02
    - 이유: 리스크 관리 통합 후 피드백 구현이 더 안정적
-   - 독립성: 중간
 
 ### Must-have 완료 후
 

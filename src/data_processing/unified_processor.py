@@ -283,13 +283,19 @@ class UnifiedDataProcessor(DataProcessor):
                 if col in df.columns and len(df) > 0:
                     val = df[col].iloc[-1]
                     if pd.notna(val):
-                        # 지표 이름 정규화 (RSI_14 -> RSI, MA_20 -> MA 등)
-                        if 'RSI' in col:
-                            indicators['RSI'] = float(val)
-                        elif 'MACD' in col:
-                            indicators['MACD'] = float(val)
-                        elif 'MA' in col:
-                            indicators['MA'] = float(val)
+                        try:
+                            float_val = float(val)
+                            # 지표 이름 정규화 (RSI_14 -> RSI, MA_20 -> MA 등)
+                            if 'RSI' in col:
+                                indicators['RSI'] = float_val
+                            elif 'MACD' in col:
+                                indicators['MACD'] = float_val
+                            elif 'MA' in col:
+                                indicators['MA'] = float_val
+                        except (ValueError, TypeError):
+                            # 문자열이나 변환 불가능한 값은 건너뛰기
+                            self.logger.debug(f"지표 컬럼 {col}의 값을 float로 변환할 수 없음: {val}")
+                            continue
             
             # 지표 신뢰도 계산 (NaN 비율 기반)
             indicator_reliability = 1.0
@@ -304,13 +310,20 @@ class UnifiedDataProcessor(DataProcessor):
             
         elif stage == 'pattern_recognition':
             # 패턴 인식 단계 체크
-            pattern_cols = [col for col in df.columns if col.startswith('PATTERN_')]
+            # PATTERN_DESCRIPTIONS는 문자열이므로 제외
+            pattern_cols = [col for col in df.columns 
+                          if col.startswith('PATTERN_') and col != 'PATTERN_DESCRIPTIONS']
             patterns = {}
             for col in pattern_cols:
                 if col in df.columns and len(df) > 0:
                     val = df[col].iloc[-1]
                     if pd.notna(val) and val != 0:
-                        patterns[col] = float(val)
+                        try:
+                            patterns[col] = float(val)
+                        except (ValueError, TypeError):
+                            # 문자열이나 변환 불가능한 값은 건너뛰기
+                            self.logger.debug(f"패턴 컬럼 {col}의 값을 float로 변환할 수 없음: {val}")
+                            continue
             
             # 패턴 신뢰도 계산
             pattern_confidence = 0.0
@@ -339,12 +352,18 @@ class UnifiedDataProcessor(DataProcessor):
                     signals['primary_signal'] = 'HOLD'
                 
                 if 'SIGNAL_CONFIDENCE' in df.columns and len(df) > 0:
-                    signals['confidence'] = float(df['SIGNAL_CONFIDENCE'].iloc[-1])
+                    try:
+                        signals['confidence'] = float(df['SIGNAL_CONFIDENCE'].iloc[-1])
+                    except (ValueError, TypeError):
+                        signals['confidence'] = 50.0
                 else:
                     signals['confidence'] = 50.0
                 
                 if 'COMBINED_SIGNAL' in df.columns and len(df) > 0:
-                    signals['signal_strength'] = abs(float(df['COMBINED_SIGNAL'].iloc[-1]))
+                    try:
+                        signals['signal_strength'] = abs(float(df['COMBINED_SIGNAL'].iloc[-1]))
+                    except (ValueError, TypeError):
+                        signals['signal_strength'] = 0.0
                 else:
                     signals['signal_strength'] = 0.0
             
@@ -596,7 +615,13 @@ class UnifiedDataProcessor(DataProcessor):
             # 지표 정보
             for col in processed_data.columns:
                 if col in ['RSI_14', 'MACD', 'MA_20', 'MA_50', 'BB_upper_20', 'BB_lower_20', 'close']:
-                    signals['indicators'][col] = float(latest_data.get(col, 0))
+                    try:
+                        val = latest_data.get(col, 0)
+                        signals['indicators'][col] = float(val)
+                    except (ValueError, TypeError):
+                        # 문자열이나 변환 불가능한 값은 기본값 사용
+                        self.logger.debug(f"지표 {col}의 값을 float로 변환할 수 없음: {val}")
+                        signals['indicators'][col] = 0.0
 
             # 패턴 정보
             pattern_cols = [col for col in processed_data.columns if col.startswith('PATTERN_')]
