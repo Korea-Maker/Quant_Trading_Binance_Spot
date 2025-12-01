@@ -5,7 +5,7 @@
 
 ## 현재 Phase
 
-**Phase 2: High Priority (진행 중)**
+**Phase 2: High Priority (Must-have 완료, Should-have 진행 중)**
 
 ## 최근 완료 사항
 
@@ -176,6 +176,13 @@
 
 ## 향후 계획
 
+### Phase 2 Should-have (진행 예정)
+
+1. Data Collection 리스크 체크 데이터 수집 로직 구현
+2. 주문 성공 여부 확인 로직 추가
+3. Agent 4: 실시간 대시보드 개선
+4. 레거시 코드 정리
+
 ### Phase 2 완료 후 (Phase 3)
 
 1. 이벤트 기반 아키텍처 도입
@@ -187,6 +194,10 @@
 1. 머신러닝 통합
 2. 고급 모니터링 시스템
 3. 자동화된 리포트 생성
+
+## To Do List
+
+**상세한 작업 목록**: `docs/TODO_LIST.md` 참고
 
 ## 참고 자료
 
